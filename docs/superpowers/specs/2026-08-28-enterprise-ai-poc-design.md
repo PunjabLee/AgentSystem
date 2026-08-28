@@ -4,11 +4,11 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.1（首轮评审修订） |
+| 文档版本 | v1.2（首轮评审修订） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 织染（印染事业部）+ 瓷砖洁具（建陶卫浴事业部）双事业部制造集团 |
-| 总工作量 | 31 人天 |
+| 总工作量 | 31.5 人天 |
 
 ### 编号约定
 
@@ -20,7 +20,7 @@
 | `M0`–`M4` | 模型部署档位 | §6.1 |
 | `L1`–`L7` | LangGraph 承担的场景 | §7.3 |
 | `D1`–`D12` | Dify 承担的场景 | §7.4 |
-| `R1`–`R10` | 风险项 | §16 |
+| `R1`–`R11` | 风险项 | §16 |
 | `Q1`–`Q4` | 待决事项 | §17 |
 
 ### 修订记录
@@ -29,6 +29,7 @@
 |---|---|---|
 | v1.0 | 2026-08-28 | 初始基线。业务域由家电制造切换为织染 + 建陶卫浴；确认 Dify/LangGraph 十九项场景分解；GraphRAG 移出本期范围 |
 | v1.1 | 2026-08-28 | 首轮评审修订。修正 §5.1 与 §8.1 关于向量库归属的自相矛盾（向量后端归 Dify 托管，默认改 Qdrant，新增 `RetrieverPort` 接口）；新增 FastAPI Gateway 请求分流层，LangGraph 不再是唯一入口；意图识别改三级路由以控延迟；新增 §10 前端实现规划与 §11 并发与性能设计。工期 30 → 31 人天 |
+| v1.2 | 2026-08-28 | 新增 §8.4 向量数据纳管：明确写入权本期归 Dify 独占，排除双写反模式（双写会切断 Dify segment 元数据链路，直接击穿引用准确率指标）；`RetrieverPort` 扩展为 `VectorStorePort`，本期只实现读侧；新增 collection 命名规范做零成本环境隔离；《向量数据纳管服务设计》列为独立交付物。工期 31 → 31.5 人天 |
 
 ---
 
@@ -54,7 +55,8 @@ PoC 的产出用于为后续规模化落地提供选型与投入决策依据。
 - Dify 十二项场景 + LangGraph 七项场景
 - RPA 降级路径的**可执行实现**（Playwright）
 - 评测体系与双部署对比报告
-- 全套交付文档
+- **向量数据纳管：接口先行**（`VectorStorePort` 读侧实现 + collection 命名规范）
+- 全套交付文档，含独立的《向量数据纳管服务设计》
 
 ### 2.2 本期明确排除
 
@@ -69,6 +71,7 @@ PoC 的产出用于为后续规模化落地提供选型与投入决策依据。
 ### 2.3 后续可扩展清单
 
 - **质量追溯图谱**：「B2409 缸布色差超标 → 反查所有受影响订单/客户/在途货/已开票」。在织染与建陶卫浴是真实高频痛点，深度多跳追溯场景下 Neo4j 才产生价值
+- **向量数据纳管服务的实现**：本期只交付接口与设计，平台化实现需多个应用共用才验证得了价值（§8.4 演进路线）
 - GraphRAG 作为检索路径的对照实验
 - 影刀 RPA 在 Windows 环境的实施
 - 真实业务系统对接与生产级权限体系
@@ -287,7 +290,7 @@ CREATE TABLE audit_log (
 | 选型 | 决定 | 理由 | 备选 |
 |---|---|---|---|
 | 向量后端 | **Qdrant（由 Dify 托管）** | 检索在 Dify 内，向量库归 Dify 管而非应用层。Qdrant 的 payload 索引对「年度 × 区域 × 产品 × BU」四维过滤最顺手，单二进制、运维轻 | pgvector / Milvus，改 Dify `VECTOR_STORE` 并重新索引即可切换（详见 §8.3） |
-| 检索出口 | **`RetrieverPort` 接口** | 真正需要抽象的不是向量库（Dify 已替我们抽象），而是「是否继续用 Dify 检索」这个决策点。Agent 侧只依赖接口 | — |
+| 检索出口 | **`VectorStorePort` 接口** | 真正需要抽象的不是向量库（Dify 已替我们抽象），而是「是否继续用 Dify 检索」这个决策点。本期只实现读侧，写入权归 Dify 独占（§8.4） | — |
 | 请求入口 | **FastAPI Gateway** | 统一鉴权、限流、审计埋点与分流。LangGraph 是网关后的执行器之一，不是入口本身 | — |
 | 前端 | **React 18 + Vite + Ant Design 5** | 团队现有 React 栈；AntD 的 Modal / Table / Card 直接支撑二次确认弹窗、审计追溯与引用卡片 | Streamlit（快 2 天，观感偏糙） |
 | Agent 编排 | **LangGraph** | 代码即流程，天然可 git diff、可单测、可进 CI，契合「git 管理全生命周期」约束 | — |
@@ -441,23 +444,88 @@ bu_code | doc_type | year | region | product_line | effective_from | effective_t
 | 层 | 所有者 | 切换方式 | 成本 |
 |---|---|---|---|
 | Dify 知识库的向量后端 | Dify | 改 Dify `.env` 的 `VECTOR_STORE` 后**重新索引** | 8 份文档重嵌入，分钟级 |
-| 应用侧检索出口 | 我们 | `RetrieverPort` 接口，实现类可替换 | 零，接口契约不变 |
+| 应用侧检索出口 | 我们 | `VectorStorePort` 接口，实现类可替换 | 零，接口契约不变 |
 
 **默认 Qdrant**。原设计选 pgvector 的理由是「本机 16GB 内存扛不住多组件」——但 Dify 部署在 GPU 服务器上，该内存约束对它并不适用，属于把约束用错了地方。Qdrant 的 payload 索引对四维元数据过滤更顺手，且单二进制、运维负担轻。
 
-应用侧只依赖 `RetrieverPort`：
-
-```python
-class RetrieverPort(Protocol):
-    async def retrieve(self, query: str, filters: dict,
-                       top_k: int) -> list[RetrievedChunk]: ...
-```
-
-本期实现 `DifyRetriever`；若后续放弃 Dify 检索，Agent 子图无需改动。
+应用侧只依赖 `VectorStorePort`（完整契约见 §8.4）。本期实现 `DifyRetriever`；若后续放弃 Dify 检索，Agent 子图无需改动。
 
 **验证任务**（P5）：切换到 pgvector 后用同一测试集重跑评测，证明可切换性并记录召回率差异，结果直接作为报告数据点。
 
 > **P1 待核实**：Dify 当期版本实际支持的向量后端清单，以及各后端在元数据过滤能力上的差异。不凭记忆写入文档；若 Qdrant 不在支持列表内则回退 pgvector。
+
+### 8.4 向量数据纳管：写入权与治理
+
+「统一纳管」在本期的正确形态是**统一读取口径与统一治理规范，而非统一写入通道**。写入通道有且只能有一个。
+
+#### 写入权归属
+
+| 方案 | 谁写 chunk | 是否双写 | 本期建服务 | D1 业务自助 |
+|---|---|---|---|---|
+| **甲（本期采纳）** | **Dify 独占** | 否 | 不建，只定接口 + 出设计 | 保留 |
+| 乙 | Dify 独占 | 否 | 建只读 + collection 级运维服务 | 保留 |
+| 丙 | 我们独占 | 否 | 建完整服务，Dify 改用外部知识库 API | **作废** |
+| ~~双写~~ | Dify 与我们都写 | **是** | — | 引用溯源断裂 |
+
+#### 为何必须排除双写
+
+Dify 在向量库之外维护自己的元数据表（document / segment 记录）与之同步。外部程序直接写向量库，Dify 元数据不知情，后果有三：
+
+1. Dify 界面中的文档列表与向量库实际内容不一致
+2. Dify 触发重建索引时会覆盖或删除外部写入的数据
+3. **引用溯源断裂**——Dify 找不到对应 segment 记录
+
+第 3 条是硬伤：验收指标含「RAG 引用准确率 ≥85%」，而引用溯源正依赖 Dify 的 segment 元数据。双写等于拆掉该指标的地基。
+
+#### VectorStorePort 接口（本期只实现读侧）
+
+```python
+class VectorStorePort(Protocol):
+    """向量数据统一接口。
+    写入权本期归 Dify 独占，故写侧契约先定义、不实现。"""
+
+    # ---- 读侧：本期实现 DifyRetriever ----
+    async def retrieve(self, query: str, filters: dict,
+                       top_k: int) -> list[RetrievedChunk]: ...
+    async def count(self, collection: str,
+                    filters: dict | None = None) -> int: ...
+
+    # ---- collection 级运维：本期定义，方案乙时实现 ----
+    async def create_collection(self, name: str, dim: int, metric: str) -> None: ...
+    async def drop_collection(self, name: str) -> None: ...
+    async def switch_alias(self, alias: str, target: str) -> None: ...
+
+    # ---- chunk 级写入：本期定义不实现，写入权归 Dify ----
+    async def upsert(self, collection: str, chunks: list[Chunk]) -> None: ...
+    async def delete_by_doc(self, collection: str, doc_id: str) -> None: ...
+```
+
+#### 环境隔离（零成本方案）
+
+collection 命名规范 `{env}_{bu}_{doctype}_v{n}`，单实例多命名空间隔离，无需独立实例：
+
+```
+prod_bua_policy_v3      别名 prod_bua_policy  ──> 指向 v3
+dev_bub_manual_v1       别名 dev_bub_manual   ──> 指向 v1
+```
+
+别名机制使换 embedding 模型时可**蓝绿重建索引**：新版本索引建好后切别名，不停服。
+
+#### 独立交付物：《向量数据纳管服务设计》
+
+作为 PoC 的独立交付文档（非架构文档子节），供后续平台化立项使用。内容清单：
+
+1. 定位与边界：纳管什么、不纳管什么
+2. 写入权模型与双写反模式
+3. Collection 生命周期与别名切换（蓝绿重建索引）
+4. CRUD API 契约（OpenAPI 定义）
+5. 环境与租户隔离模型
+6. **Embedding 模型版本管理与全量重嵌入流程**（纳管服务最实的价值点）
+7. 跨后端迁移方案（Qdrant ↔ pgvector ↔ Milvus）
+8. 一致性对账：源文档与向量库
+9. 备份与恢复
+10. 监控指标与告警阈值
+11. 演进路线：接口先行 → 只读运维服务 → 平台化，三阶段
 
 ---
 
@@ -631,16 +699,16 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | **P2 业务数据 + API** | 双 BU 三表建模、≥100 条/表脱敏模拟数据、FastAPI + OpenAPI 3.1 | Swagger 可点通，五类查询返回真实感数据 | 5 |
 | **P3 RAG + Agent 主链路** | 8 份文档、Dify 知识库、检索配置快照脚本、Supervisor + 五子图、多轮澄清、写操作二次确认 + 审计、React 对话界面 | 五个主线场景端到端跑通，可演示 | 10 |
 
-### 里程碑二：完整能力与交付物（P4–P5，13 人天）
+### 里程碑二：完整能力与交付物（P4–P5，13.5 人天）
 
 | 阶段 | 交付 | 验收信号 | 人天 |
 |---|---|---|---|
 | **P4 Workflow + RPA** | Dify 十二项场景、模拟遗留 ERP Web UI、Playwright RPA、API 超时自动降级、影刀流程设计文档 | 「API 挂掉 → RPA 兜底 → 回填结果」可演示 | 7 |
-| **P5 评测 + 交付物** | ≥40 条测试集、M1/M2/M3/M4 四档评测、**10 并发压测**、**向量库切换验证（Qdrant → pgvector 重跑评测）**、架构文档、WBS、API 文档、落地手册、部署运维、资源计划报告 | 报告出数，给出选型建议 | 6 |
+| **P5 评测 + 交付物** | ≥40 条测试集、M1/M2/M3/M4 四档评测、**10 并发压测**、**向量库切换验证（Qdrant → pgvector 重跑评测）**、架构文档、WBS、API 文档、落地手册、部署运维、资源计划报告、**《向量数据纳管服务设计》** | 报告出数，给出选型建议 | 6.5 |
 
 ### 工期换算
 
-**总工作量 31 人天。** 受串行依赖限制：
+**总工作量 31.5 人天。** 受串行依赖限制：
 
 | 团队规模 | 日历周期 | 说明 |
 |---|---|---|
@@ -669,7 +737,8 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | R7 | 十二项 Dify 场景范围较大 | 工期超支 | 里程碑一为完整交付切点，中期可据反馈砍 P4/P5 范围 |
 | R8 | 双 BU 使数据与文档工作量翻倍 | 工期超支 | 共用同构数据模型，仅属性字段差异化 |
 | R9 | 工具函数中混入同步阻塞调用 | 并发直接塌方，延迟指标失真 | 全链路 async 强制约束 + lint 规则拦截；压测作为兜底检出手段 |
-| R10 | Dify 当期版本对 Qdrant 的支持情况未核实 | 向量后端选型返工 | P1 核实支持清单；若不支持则回退 pgvector，`RetrieverPort` 使应用侧不受影响 |
+| R10 | Dify 当期版本对 Qdrant 的支持情况未核实 | 向量后端选型返工 | P1 核实支持清单；若不支持则回退 pgvector，`VectorStorePort` 使应用侧不受影响 |
+| R11 | 后续有人绕过 Dify 直接写向量库 | 引用溯源断裂，击穿 ≥85% 引用准确率指标 | §8.4 写入权模型写入设计文档并在代码中以接口分层强制；`VectorStorePort` 写侧本期不提供实现 |
 
 ---
 
