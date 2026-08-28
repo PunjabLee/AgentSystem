@@ -1,0 +1,49 @@
+# 环境与密钥（严禁入库）
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node / 前端
+node_modules/
+dist/
+.vite/
+*.local
+
+# 数据与模型产物
+data/raw/
+data/vectors/
+*.db
+*.sqlite3
+models/
+
+# 评测与日志产物
+reports/runs/
+logs/
+*.log
+
+# RPA 取证产物
+artifacts/screenshots/
+playwright-report/
+test-results/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+!.vscode/extensions.json
