@@ -4,13 +4,14 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.5（首轮评审修订） |
+| 文档版本 | v1.6（首轮评审修订） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 织染（印染事业部）+ 瓷砖洁具（建陶卫浴事业部）双事业部制造集团 |
 | 总工作量 | 36.0 人天 |
 | 团队规模 | 1 人（全串行） |
 | 日历周期 | 7.2 周，含缓冲约 8 周 |
+| 关联文档 | [项目宪法](../../CONSTITUTION.md) · [技术栈版本矩阵](../../TECH-STACK-VERSIONS.md) |
 
 ### 编号约定
 
@@ -22,7 +23,7 @@
 | `M0`–`M3` | 模型部署档位 | §6.1 |
 | `L1`–`L7` | LangGraph 承担的场景 | §7.3 |
 | `D1`–`D12` | Dify 承担的场景 | §7.4 |
-| `R1`–`R13` | 风险项 | §16 |
+| `R1`–`R15` | 风险项 | §16 |
 | `Q1`–`Q4` | 待决事项 | §17 |
 
 ### 修订记录
@@ -35,6 +36,7 @@
 | v1.3 | 2026-08-28 | 向量后端由 Qdrant 改回 **pgvector**。v1.2 的论证有缺陷——推翻了「本机内存约束」这一条 pgvector 论据后即改选 Qdrant，未重新审视其余论据（少一个组件、运维体系统一、SQL 可达便于对账），而这些在本项目规模下均成立；Qdrant 的 payload 索引优势在几千 chunk 量级不发生。同时记录重估触发条件（>10 万 chunk 且高选择性过滤）。连带修正两处：PostgreSQL 由本机移至 GPU 服务器作为唯一权威实例（否则两侧各起一个实例将抵消「少一个组件」的优势）；蓝绿重建索引改在 Dify 知识库层完成而非向量库表层，避免落入双写反模式且做到 backend-agnostic。R11 补充 pgvector 下的权限隔离要求 |
 | v1.4 | 2026-08-28 | 前端 UI 框架由 Ant Design 5 改为 **Ant Design 6**，React 由 18 改为 **19**（`react@latest` = 19.2.8）；核实后排除 ProComponents（`@ant-design/pro-components` 停更逾年且不支持 antd 6）。原选 v5 系依训练数据惯性而非当下判断；核实 npm registry 后确认 `latest` 已是 6.6.2（v6.x 共 33 个正式版），且绿地项目不存在留在 v5 的最大理由——迁移成本；antd 6 另原生支持 React 19，免去 v5 所需的补丁包。新增 §2.4：评估 github/spec-kit 后决定移植其 **constitution** 与 **converge** 两项机制而不引入完整工具链（避免与既有 superpowers 工作流形成双真相来源），新增 R12 |
 | v1.5 | 2026-08-28 | 四项待决事项全部关闭。GPU 全部改用 AutoDL，模型档位由五档并为四档（M0–M3）；**新增结论边界声明——数据安全性一维在 AutoDL 上无法取得实测证据**。修正 v1.3 的部署决策：GPU 改用 AutoDL 后，将唯一权威 PostgreSQL 置于按小时计费、可随时释放的租用实例上不再成立，改为「有状态的一切留在本机，AutoDL 只做无状态推理」；同时重新核算本机 16GB 内存预算（约 5GB，可行），并确立 Ollama 与 Dify 错峰的硬约束。通知渠道确定为企微/钉钉/飞书/邮件四渠道全实现（`NotifierPort`）。团队确定为 1 人，**总工作量由 31.5 修正为 36.0 人天**（v1.4 的 constitution 与五次 converge 共 3 人天此前漏计），日历周期 7.2 周、含缓冲约 8 周 |
+| v1.6 | 2026-08-28 | 全栈版本核实（新增 [technical-stack-versions](../../TECH-STACK-VERSIONS.md)）。直接查询 PyPI、npm、GitHub Releases、endoflife.date 与 Dify 源码，非凭记忆填写。确认无依赖冲突：Python 3.14.6 的全部关键依赖均有预编译轮子（`pydantic-core`、`asyncpg`、`psycopg-binary`、`torch`、`greenlet`、`tiktoken` 均有 cp314；`ruff` 与 `playwright` 发 ABI 无关的 `py3-none-<平台>` 轮子）；Node 24.18 为 LTS 且满足 Vite 8 要求。确定 PostgreSQL 17、Dify 1.17.0、vLLM 0.28.0、pgvector 0.8.6、Ubuntu 24.04 LTS（25.04/25.10 已 EOL 不可用）。关闭 R10——Dify 源码确认支持 pgvector。新增 R14（Dify 2.0 beta 误升级）与 R15（**Dify 默认 compose 会额外起一个 PostgreSQL 容器，不干预将出现三个 PG 实例，彻底违背 pgvector 选型初衷**）。确立版本锁定策略：`uv.lock` 与 `package-lock.json` 提交进 git |
 
 ---
 
@@ -330,6 +332,7 @@ CREATE TABLE audit_log (
 | 请求入口 | **FastAPI Gateway** | 统一鉴权、限流、审计埋点与分流。LangGraph 是网关后的执行器之一，不是入口本身 | — |
 | 前端 | **React 19 + Vite + Ant Design 6** | 团队现有 React 栈；AntD 的 Modal / Table / Card 直接支撑二次确认弹窗、审计追溯与引用卡片 | Streamlit（快 2 天，观感偏糙） |
 | 通知渠道 | **`NotifierPort` + 四适配器** | 企微 / 钉钉 / 飞书均支持群机器人 webhook，只需一个 webhook 地址、无需企业应用审批；邮件走 SMTP。四者统一接口、配置化启用 | — |
+| 版本锁定 | **`uv.lock` + `package-lock.json` 提交进 git** | 单人项目无第二双眼睛复核环境差异，锁文件是环境可复现的唯一保障；全部组件版本见[技术栈版本矩阵](../../TECH-STACK-VERSIONS.md) | — |
 | Agent 编排 | **LangGraph** | 代码即流程，天然可 git diff、可单测、可进 CI，契合「git 管理全生命周期」约束 | — |
 | 流程编排 | **Dify** | 业务人员可自助迭代的可视化层 | n8n |
 | Agent 拓扑 | **Supervisor + 五子图** | 五场景边界天然清晰；子图各持槽位状态，避免全局 state 污染 | 单一大图（可推翻项） |
@@ -519,7 +522,9 @@ bu_code | doc_type | year | region | product_line | effective_from | effective_t
 
 **验证任务**（P5）：切换到 Qdrant 后用同一测试集重跑评测，证明可切换性并记录召回率差异，结果直接作为报告数据点。
 
-> **P1 待核实**：Dify 当期版本实际支持的向量后端清单、pgvector 的表结构与索引类型（HNSW / IVFFlat）、以及各后端在元数据过滤能力上的差异。不凭记忆写入文档。
+> **已核实（2026-08-28）**：Dify 源码 `api/core/rag/datasource/vdb/vector_type.py` 共枚举 32 种向量后端，`VectorType.PGVECTOR` 在列，Qdrant 与 Milvus 亦在列。详见[技术栈版本矩阵](../../TECH-STACK-VERSIONS.md) §7。
+>
+> ⚠️ **随之发现一个部署陷阱**：Dify 的 `docker-compose.yaml` 中向量库 `pgvector` 是**独立于 Dify 元数据库 `db_postgres` 的 service**，各带 compose profile。若按默认部署，加上我们的业务库将出现**三个 PostgreSQL 实例**，彻底违背选用 pgvector 的初衷。处置方式是配置 Dify 的 `DB_HOST` 与 `PGVECTOR_HOST` 均指向我们那一个实例的 `dify` 库，并从 `COMPOSE_PROFILES` 中移除 `postgresql` 与 `pgvector`。详见版本矩阵 §6，此项列入 P1 实施细节与 converge 检查。
 
 ### 8.4 向量数据纳管：写入权与治理
 
@@ -825,7 +830,9 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | R7 | 十二项 Dify 场景范围较大 | 工期超支 | 里程碑一为完整交付切点，中期可据反馈砍 P4/P5 范围 |
 | R8 | 双 BU 使数据与文档工作量翻倍 | 工期超支 | 共用同构数据模型，仅属性字段差异化 |
 | R9 | 工具函数中混入同步阻塞调用 | 并发直接塌方，延迟指标失真 | 全链路 async 强制约束 + lint 规则拦截；压测作为兜底检出手段 |
-| R10 | Dify 当期版本对 pgvector 的表结构与索引类型未核实 | 向量后端选型返工 | P1 核实支持清单与索引实现；`VectorStorePort` 使应用侧不受影响 |
+| R10 | ~~Dify 对 pgvector 的支持未核实~~ | — | ✅ **已关闭**（v1.6）：源码 `VectorType.PGVECTOR` 确认支持，Qdrant / Milvus 同在列，切换验证可行。详见[技术栈版本矩阵](../../TECH-STACK-VERSIONS.md) §7 |
+| R14 | Dify 2.0 仍处 beta（2.0.0-beta.2），8 周周期内可能转正，误升级将引入破坏性变更 | 环境不可复现、返工 | 锁定 **Dify 1.17.0**，compose 中固定镜像 tag 不用 `latest`；每阶段 converge 检查确认版本未漂移 |
+| R15 | Dify 默认 compose 额外起一个 PostgreSQL 容器供 pgvector 使用，若未干预将出现三个 PG 实例 | 彻底违背 pgvector 选型初衷（少组件、统一运维、SQL 可对账） | 配置指向外部 PostgreSQL 并移除相应 compose profile（版本矩阵 §6）；P1 converge 检查中验证实例数为一 |
 | R13 | AutoDL 实例按小时计费且可随时释放，SSH 隧道中断或实例重建将打断评测 | M1/M2 档评测数据不完整 | 隧道保活与断线重连；评测脚本支持断点续跑；每次评测前校验各档连通性；有状态数据全部留在本机（§5.2），实例可随意重建 |
 | R12 | 750 行设计文档中的硬约束散落各章，实现者（人或 agent）漏看单条约束 | 审计缺失、双写、同步阻塞等红线被击穿 | 抽取为 `docs/CONSTITUTION.md` 九条原则（§2.4）；每模块动工前逐条核对，每阶段末做收敛检查 |
 | R11 | 后续有人绕过 Dify 直接写向量库 | 引用溯源断裂，击穿 ≥85% 引用准确率指标 | §8.4 写入权模型写入设计文档并在代码中以接口分层强制；`VectorStorePort` 写侧本期不提供实现。**pgvector 下该风险更高**——向量表与业务表同库，SQL 可直达，须以数据库账号权限隔离：应用账号对 `dify` 库只读 |
