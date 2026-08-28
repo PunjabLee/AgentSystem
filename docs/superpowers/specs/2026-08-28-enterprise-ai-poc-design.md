@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.3（首轮评审修订） |
+| 文档版本 | v1.4（首轮评审修订） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 织染（印染事业部）+ 瓷砖洁具（建陶卫浴事业部）双事业部制造集团 |
@@ -20,7 +20,7 @@
 | `M0`–`M4` | 模型部署档位 | §6.1 |
 | `L1`–`L7` | LangGraph 承担的场景 | §7.3 |
 | `D1`–`D12` | Dify 承担的场景 | §7.4 |
-| `R1`–`R11` | 风险项 | §16 |
+| `R1`–`R12` | 风险项 | §16 |
 | `Q1`–`Q4` | 待决事项 | §17 |
 
 ### 修订记录
@@ -31,6 +31,7 @@
 | v1.1 | 2026-08-28 | 首轮评审修订。修正 §5.1 与 §8.1 关于向量库归属的自相矛盾（向量后端归 Dify 托管，默认改 Qdrant，新增 `RetrieverPort` 接口）；新增 FastAPI Gateway 请求分流层，LangGraph 不再是唯一入口；意图识别改三级路由以控延迟；新增 §10 前端实现规划与 §11 并发与性能设计。工期 30 → 31 人天 |
 | v1.2 | 2026-08-28 | 新增 §8.4 向量数据纳管：明确写入权本期归 Dify 独占，排除双写反模式（双写会切断 Dify segment 元数据链路，直接击穿引用准确率指标）；`RetrieverPort` 扩展为 `VectorStorePort`，本期只实现读侧；新增 collection 命名规范做零成本环境隔离；《向量数据纳管服务设计》列为独立交付物。工期 31 → 31.5 人天 |
 | v1.3 | 2026-08-28 | 向量后端由 Qdrant 改回 **pgvector**。v1.2 的论证有缺陷——推翻了「本机内存约束」这一条 pgvector 论据后即改选 Qdrant，未重新审视其余论据（少一个组件、运维体系统一、SQL 可达便于对账），而这些在本项目规模下均成立；Qdrant 的 payload 索引优势在几千 chunk 量级不发生。同时记录重估触发条件（>10 万 chunk 且高选择性过滤）。连带修正两处：PostgreSQL 由本机移至 GPU 服务器作为唯一权威实例（否则两侧各起一个实例将抵消「少一个组件」的优势）；蓝绿重建索引改在 Dify 知识库层完成而非向量库表层，避免落入双写反模式且做到 backend-agnostic。R11 补充 pgvector 下的权限隔离要求 |
+| v1.4 | 2026-08-28 | 前端 UI 框架由 Ant Design 5 改为 **Ant Design 6**，React 由 18 改为 **19**（`react@latest` = 19.2.8）；核实后排除 ProComponents（`@ant-design/pro-components` 停更逾年且不支持 antd 6）。原选 v5 系依训练数据惯性而非当下判断；核实 npm registry 后确认 `latest` 已是 6.6.2（v6.x 共 33 个正式版），且绿地项目不存在留在 v5 的最大理由——迁移成本；antd 6 另原生支持 React 19，免去 v5 所需的补丁包。新增 §2.4：评估 github/spec-kit 后决定移植其 **constitution** 与 **converge** 两项机制而不引入完整工具链（避免与既有 superpowers 工作流形成双真相来源），新增 R12 |
 
 ---
 
@@ -76,6 +77,37 @@ PoC 的产出用于为后续规模化落地提供选型与投入决策依据。
 - GraphRAG 作为检索路径的对照实验
 - 影刀 RPA 在 Windows 环境的实施
 - 真实业务系统对接与生产级权限体系
+
+---
+
+### 2.4 工程方法：借用 SDD 的两个机制，不引入 spec-kit 工具链
+
+评估 [github/spec-kit](https://github.com/github/spec-kit)（Spec-Driven Development，2026-08 已发布 1.0.0）后的结论：**移植其两项机制，不引入完整工具链**。
+
+**差距分析**——spec-kit 流水线与本项目已采用的 superpowers 工作流对照：
+
+| spec-kit 阶段 | 本项目对应物 | 结论 |
+|---|---|---|
+| `/speckit-constitution` | 无 | **真缺口，需补** |
+| `/speckit-specify` | `brainstorming` → 本设计文档 | 已覆盖 |
+| `/speckit-plan` / `/speckit-tasks` | `writing-plans` 及其任务分解 | 已覆盖 |
+| `/speckit-implement` | `executing-plans` | 已覆盖 |
+| `/speckit-converge` | `verification-before-completion`（仅验证声称是否属实，不检测 spec↔代码漂移） | **部分缺口，需补** |
+
+**不引入全套的三条理由**：
+
+1. **双流程打架**——本项目 spec 位于 `docs/superpowers/specs/`，spec-kit 需 `.specify/` 与 `specs/NNN-feature/`，将产生两个真相来源
+2. **模板不匹配**——spec-kit 的 spec 模板面向**功能级**（user story + 验收标准）；本文档是**程序级架构设计文档**，强行套用会丢失结构
+3. **粒度不匹配**——spec-kit 按 feature 目录组织，本 PoC 需拆成十余个 feature 目录才能容纳
+
+**移植的两项机制**：
+
+| 机制 | 落地形式 | 成本 |
+|---|---|---|
+| **Constitution** | `docs/CONSTITUTION.md`，9 条不可协商原则，每模块动工前逐条核对 | 0.5 人天 |
+| **Converge** | P1–P5 每阶段末增设收敛检查，对照本文档产出偏差清单并记录处置 | 每阶段 0.5 人天 |
+
+**重新评估时机**：PoC 通过并进入规模化落地、团队转为多人与多 agent 并行开发时，标准化流水线的价值方才显现。列入 P5「后续规模化建议」。
 
 ---
 
@@ -240,7 +272,7 @@ CREATE TABLE audit_log (
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│  对话界面   React 18 + Vite + Ant Design 5                         │
+│  对话界面   React 19 + Vite + Ant Design 6                         │
 │  档位切换 M0-M4 ▾ │ 引用来源卡片 │ 二次确认弹窗 │ 审计追溯视图        │
 └────────────────────────────┬──────────────────────────────────────┘
                              │  SSE 流式 / REST
@@ -293,7 +325,7 @@ CREATE TABLE audit_log (
 | 向量后端 | **pgvector（由 Dify 托管）** | 检索在 Dify 内，向量库归 Dify 管而非应用层。PostgreSQL 本已必须部署（业务数据 + 审计 + checkpointer），复用即少一个组件、少一套备份与监控体系；且向量与业务表同库，一致性对账可直接用 SQL join | Qdrant / Milvus，改 Dify `VECTOR_STORE` 并重新索引即可切换（详见 §8.3） |
 | 检索出口 | **`VectorStorePort` 接口** | 真正需要抽象的不是向量库（Dify 已替我们抽象），而是「是否继续用 Dify 检索」这个决策点。本期只实现读侧，写入权归 Dify 独占（§8.4） | — |
 | 请求入口 | **FastAPI Gateway** | 统一鉴权、限流、审计埋点与分流。LangGraph 是网关后的执行器之一，不是入口本身 | — |
-| 前端 | **React 18 + Vite + Ant Design 5** | 团队现有 React 栈；AntD 的 Modal / Table / Card 直接支撑二次确认弹窗、审计追溯与引用卡片 | Streamlit（快 2 天，观感偏糙） |
+| 前端 | **React 19 + Vite + Ant Design 6** | 团队现有 React 栈；AntD 的 Modal / Table / Card 直接支撑二次确认弹窗、审计追溯与引用卡片 | Streamlit（快 2 天，观感偏糙） |
 | Agent 编排 | **LangGraph** | 代码即流程，天然可 git diff、可单测、可进 CI，契合「git 管理全生命周期」约束 | — |
 | 流程编排 | **Dify** | 业务人员可自助迭代的可视化层 | n8n |
 | Agent 拓扑 | **Supervisor + 五子图** | 五场景边界天然清晰；子图各持槽位状态，避免全局 state 污染 | 单一大图（可推翻项） |
@@ -599,7 +631,7 @@ LangGraph checkpointer 落 PostgreSQL，以 `session_id` 为键。前端刷新�
 |---|---|
 | 框架 | **React 18 + TypeScript**（团队现有技术栈） |
 | 构建 | **Vite** |
-| UI 组件库 | **Ant Design 5** |
+| UI 组件库 | **Ant Design 6** |
 | 状态管理 | Zustand（轻量够用，不引入 Redux） |
 | 流式传输 | SSE（fetch + ReadableStream） |
 
@@ -614,6 +646,13 @@ LangGraph checkpointer 落 PostgreSQL，以 `session_id` 为键。前端刷新�
 ```
 
 ### 10.2 参照的开源实践
+
+> **版本选型依据（2026-08-28 核实 npm registry）**：`antd@latest` = **6.6.2**，v6.x 已发布 33 个正式版，早期采用风险窗口已过。v5.x 最新为 5.29.3，已非 `latest`。
+> 选 6 而非 5 的决定性理由：**本项目是绿地开发，不存在留在 v5 的最大理由——迁移成本**。此外 antd 6 的 `peerDependencies` 为 `react >=18`，原生支持 React 19；而 antd 5 在 React 19 下需额外引入 `@ant-design/v5-patch-for-react-19` 补丁包。
+>
+> **React 版本**：`react@latest` = **19.2.8**（2026-07-21）。绿地项目直接采用 React 19，与 antd 6 的 `peerDependencies` 相符。
+>
+> **ProComponents 排除（2026-08-28 核实）**：`@ant-design/pro-components@latest` = **2.8.10**，发布于 **2025-07-17**，距今 13 个月无新版；其 `peerDependencies` 仅声明 `antd: ^4.24.15 || ^5.11.2`，**不支持 antd 6**。故本项目不引入 ProComponents——即使留在 antd 5，依赖一个停更逾年的包本身亦属风险。所需组件（Modal / Card / Table / Select / Tag / Timeline）均在 antd 主包内，审计追溯视图以原生 `Table` 实现即可，无功能损失。
 
 | 参照 | 借鉴内容 |
 |---|---|
@@ -766,6 +805,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | R8 | 双 BU 使数据与文档工作量翻倍 | 工期超支 | 共用同构数据模型，仅属性字段差异化 |
 | R9 | 工具函数中混入同步阻塞调用 | 并发直接塌方，延迟指标失真 | 全链路 async 强制约束 + lint 规则拦截；压测作为兜底检出手段 |
 | R10 | Dify 当期版本对 pgvector 的表结构与索引类型未核实 | 向量后端选型返工 | P1 核实支持清单与索引实现；`VectorStorePort` 使应用侧不受影响 |
+| R12 | 750 行设计文档中的硬约束散落各章，实现者（人或 agent）漏看单条约束 | 审计缺失、双写、同步阻塞等红线被击穿 | 抽取为 `docs/CONSTITUTION.md` 九条原则（§2.4）；每模块动工前逐条核对，每阶段末做收敛检查 |
 | R11 | 后续有人绕过 Dify 直接写向量库 | 引用溯源断裂，击穿 ≥85% 引用准确率指标 | §8.4 写入权模型写入设计文档并在代码中以接口分层强制；`VectorStorePort` 写侧本期不提供实现。**pgvector 下该风险更高**——向量表与业务表同库，SQL 可直达，须以数据库账号权限隔离：应用账号对 `dify` 库只读 |
 
 ---
