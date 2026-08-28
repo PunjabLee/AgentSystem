@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.2（首轮评审修订） |
+| 文档版本 | v1.3（首轮评审修订） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 织染（印染事业部）+ 瓷砖洁具（建陶卫浴事业部）双事业部制造集团 |
@@ -30,6 +30,7 @@
 | v1.0 | 2026-08-28 | 初始基线。业务域由家电制造切换为织染 + 建陶卫浴；确认 Dify/LangGraph 十九项场景分解；GraphRAG 移出本期范围 |
 | v1.1 | 2026-08-28 | 首轮评审修订。修正 §5.1 与 §8.1 关于向量库归属的自相矛盾（向量后端归 Dify 托管，默认改 Qdrant，新增 `RetrieverPort` 接口）；新增 FastAPI Gateway 请求分流层，LangGraph 不再是唯一入口；意图识别改三级路由以控延迟；新增 §10 前端实现规划与 §11 并发与性能设计。工期 30 → 31 人天 |
 | v1.2 | 2026-08-28 | 新增 §8.4 向量数据纳管：明确写入权本期归 Dify 独占，排除双写反模式（双写会切断 Dify segment 元数据链路，直接击穿引用准确率指标）；`RetrieverPort` 扩展为 `VectorStorePort`，本期只实现读侧；新增 collection 命名规范做零成本环境隔离；《向量数据纳管服务设计》列为独立交付物。工期 31 → 31.5 人天 |
+| v1.3 | 2026-08-28 | 向量后端由 Qdrant 改回 **pgvector**。v1.2 的论证有缺陷——推翻了「本机内存约束」这一条 pgvector 论据后即改选 Qdrant，未重新审视其余论据（少一个组件、运维体系统一、SQL 可达便于对账），而这些在本项目规模下均成立；Qdrant 的 payload 索引优势在几千 chunk 量级不发生。同时记录重估触发条件（>10 万 chunk 且高选择性过滤）。连带修正两处：PostgreSQL 由本机移至 GPU 服务器作为唯一权威实例（否则两侧各起一个实例将抵消「少一个组件」的优势）；蓝绿重建索引改在 Dify 知识库层完成而非向量库表层，避免落入双写反模式且做到 backend-agnostic。R11 补充 pgvector 下的权限隔离要求 |
 
 ---
 
@@ -272,11 +273,11 @@ CREATE TABLE audit_log (
                    │      │  模拟遗留 ERP Web   │       │
                    │      │   + Playwright RPA │       │
                    │      └─────────┬──────────┘       │
-       ┌───────────▼──────────┐     │            ┌─────▼──────┐
-       │      PostgreSQL      │◄────┘            │   Qdrant   │
-       │  业务数据 + 审计日志   │                   │ (Dify 托管) │
-       │  + LangGraph 检查点   │                   └────────────┘
-       └──────────────────────┘
+       ┌───────────▼──────────────────────────────────┐
+       │            PostgreSQL  (GPU 服务器)           │◄─┘
+       │  agentsystem 库：业务数据 + 审计 + 检查点      │
+       │  dify 库：pgvector 向量 + Dify 元数据          │
+       └──────────────────────────────────────────────┘
 
         ┌──────────────────────────────────────────────┐
         │  模型抽象层 LLMGateway                        │
@@ -289,7 +290,7 @@ CREATE TABLE audit_log (
 
 | 选型 | 决定 | 理由 | 备选 |
 |---|---|---|---|
-| 向量后端 | **Qdrant（由 Dify 托管）** | 检索在 Dify 内，向量库归 Dify 管而非应用层。Qdrant 的 payload 索引对「年度 × 区域 × 产品 × BU」四维过滤最顺手，单二进制、运维轻 | pgvector / Milvus，改 Dify `VECTOR_STORE` 并重新索引即可切换（详见 §8.3） |
+| 向量后端 | **pgvector（由 Dify 托管）** | 检索在 Dify 内，向量库归 Dify 管而非应用层。PostgreSQL 本已必须部署（业务数据 + 审计 + checkpointer），复用即少一个组件、少一套备份与监控体系；且向量与业务表同库，一致性对账可直接用 SQL join | Qdrant / Milvus，改 Dify `VECTOR_STORE` 并重新索引即可切换（详见 §8.3） |
 | 检索出口 | **`VectorStorePort` 接口** | 真正需要抽象的不是向量库（Dify 已替我们抽象），而是「是否继续用 Dify 检索」这个决策点。本期只实现读侧，写入权归 Dify 独占（§8.4） | — |
 | 请求入口 | **FastAPI Gateway** | 统一鉴权、限流、审计埋点与分流。LangGraph 是网关后的执行器之一，不是入口本身 | — |
 | 前端 | **React 18 + Vite + Ant Design 5** | 团队现有 React 栈；AntD 的 Modal / Table / Card 直接支撑二次确认弹窗、审计追溯与引用卡片 | Streamlit（快 2 天，观感偏糙） |
@@ -299,12 +300,23 @@ CREATE TABLE audit_log (
 
 ### 5.2 部署拓扑
 
-- **本机（macOS, 16GB）**：React 前端、FastAPI 业务 API、LangGraph 内核、PostgreSQL + pgvector、Ollama(M0)
-- **GPU 服务器（Linux）**：vLLM(M1/M2)、Dify 全套容器、Embedding/Rerank 服务
+- **本机（macOS, 16GB）**：仅开发环境——React dev server、FastAPI + LangGraph 热重载、Ollama(M0)、Docker 本地 PostgreSQL
+- **GPU 服务器（Linux）**：vLLM(M1/M2)、Dify 全套容器、Embedding/Rerank 服务、**PostgreSQL + pgvector（唯一权威实例）**
 - **AutoDL（按需）**：vLLM(M3)，经 SSH 端口转发接入
 - **阿里云百炼**：M4，OpenAI 兼容 HTTP
 
-> **约束说明**：本机 16GB 统一内存无法承载 Dify 全家桶（约 6 容器）+ PostgreSQL + 向量库 + 应用服务，因此 **Dify 必须部署在 GPU 服务器侧**。
+> **约束说明**：本机 16GB 统一内存无法承载 Dify 全家桶（约 6 容器）+ PostgreSQL + 应用服务，因此 **Dify 与 PostgreSQL 均部署在 GPU 服务器侧**。
+
+#### PostgreSQL 实例归属
+
+选用 pgvector 后，Dify 需访问 PostgreSQL。跨机访问不合理，而两侧各起一个实例则失去「少一个组件」这一核心优势。因此：
+
+| | 部署 | 内容 |
+|---|---|---|
+| **权威实例** | GPU 服务器（Linux） | `agentsystem` 库（业务数据 + 审计 + checkpointer）与 `dify` 库（向量 + Dify 元数据），同实例、不同 database，逻辑隔离 |
+| 开发实例 | 本机 Docker | 结构相同，靠配置切换；仅供本地开发与单测 |
+
+生产形态本就应在 Linux 服务器上，本机 macOS 只是开发机。这样本机负载进一步下降。
 
 ---
 
@@ -446,13 +458,20 @@ bu_code | doc_type | year | region | product_line | effective_from | effective_t
 | Dify 知识库的向量后端 | Dify | 改 Dify `.env` 的 `VECTOR_STORE` 后**重新索引** | 8 份文档重嵌入，分钟级 |
 | 应用侧检索出口 | 我们 | `VectorStorePort` 接口，实现类可替换 | 零，接口契约不变 |
 
-**默认 Qdrant**。原设计选 pgvector 的理由是「本机 16GB 内存扛不住多组件」——但 Dify 部署在 GPU 服务器上，该内存约束对它并不适用，属于把约束用错了地方。Qdrant 的 payload 索引对四维元数据过滤更顺手，且单二进制、运维负担轻。
+**默认 pgvector**，理由有四：
+
+1. **少一个组件**——PostgreSQL 本已必须部署（业务数据、审计日志、LangGraph checkpointer），复用即少一章部署文档、少一套备份策略、少一个监控对象、少一个故障点
+2. **运维体系统一**——企业已有 PostgreSQL 的备份/恢复/权限/监控能力，无需为新组件建立新的运维知识
+3. **SQL 可达**——一致性对账（§8.4）可直接 SQL join 业务表，如「政策文档中提及岩板的 chunk 与库存表中的岩板产品是否对得上」；换成独立向量库则需另写代码
+4. **规模完全够用**——8 份文档、几千 chunk，HNSW 索引毫无压力
+
+> **已知边界与重估触发条件**：pgvector 的 HNSW 索引在**高选择性过滤**下存在召回衰减——过滤条件筛掉绝大部分数据时，图遍历可能凑不够候选。在本项目几千 chunk 的规模下不发生（过滤后可退化为精确扫描，仍是毫秒级）。**当语料超过 10 万 chunk 且检索普遍带高选择性过滤时，应重新评估 Qdrant / Milvus**；届时 `VectorStorePort` 已就位，切换成本仍只是重新索引。
 
 应用侧只依赖 `VectorStorePort`（完整契约见 §8.4）。本期实现 `DifyRetriever`；若后续放弃 Dify 检索，Agent 子图无需改动。
 
-**验证任务**（P5）：切换到 pgvector 后用同一测试集重跑评测，证明可切换性并记录召回率差异，结果直接作为报告数据点。
+**验证任务**（P5）：切换到 Qdrant 后用同一测试集重跑评测，证明可切换性并记录召回率差异，结果直接作为报告数据点。
 
-> **P1 待核实**：Dify 当期版本实际支持的向量后端清单，以及各后端在元数据过滤能力上的差异。不凭记忆写入文档；若 Qdrant 不在支持列表内则回退 pgvector。
+> **P1 待核实**：Dify 当期版本实际支持的向量后端清单、pgvector 的表结构与索引类型（HNSW / IVFFlat）、以及各后端在元数据过滤能力上的差异。不凭记忆写入文档。
 
 ### 8.4 向量数据纳管：写入权与治理
 
@@ -502,14 +521,23 @@ class VectorStorePort(Protocol):
 
 #### 环境隔离（零成本方案）
 
-collection 命名规范 `{env}_{bu}_{doctype}_v{n}`，单实例多命名空间隔离，无需独立实例：
+Dify **知识库命名规范** `{env}_{bu}_{doctype}_v{n}`，单实例多命名空间隔离，无需独立实例：
 
 ```
-prod_bua_policy_v3      别名 prod_bua_policy  ──> 指向 v3
-dev_bub_manual_v1       别名 dev_bub_manual   ──> 指向 v1
+prod_bua_policy_v3      应用配置 policy_dataset_id ──> 指向 v3
+dev_bub_manual_v1       应用配置 manual_dataset_id ──> 指向 v1
 ```
 
-别名机制使换 embedding 模型时可**蓝绿重建索引**：新版本索引建好后切别名，不停服。
+#### 蓝绿重建索引：切在 Dify 层，不切在向量库表层
+
+换 embedding 模型需全量重嵌入。**切换动作必须发生在 Dify 知识库层，而非向量库表层**——写入权归 Dify，我们不应直接操作它的表（否则即落入双写反模式）。正确流程：
+
+```
+建新知识库 prod_bua_policy_v4  →  重新索引（旧库继续服务）
+    →  评测新库召回质量  →  切应用配置 dataset_id 指向 v4  →  下线 v3
+```
+
+此方案是 **backend-agnostic** 的：pgvector 与 Qdrant 下流程完全一致，因为它不依赖任何特定向量库的别名能力。
 
 #### 独立交付物：《向量数据纳管服务设计》
 
@@ -521,7 +549,7 @@ dev_bub_manual_v1       别名 dev_bub_manual   ──> 指向 v1
 4. CRUD API 契约（OpenAPI 定义）
 5. 环境与租户隔离模型
 6. **Embedding 模型版本管理与全量重嵌入流程**（纳管服务最实的价值点）
-7. 跨后端迁移方案（Qdrant ↔ pgvector ↔ Milvus）
+7. 跨后端迁移方案（pgvector ↔ Qdrant ↔ Milvus）
 8. 一致性对账：源文档与向量库
 9. 备份与恢复
 10. 监控指标与告警阈值
@@ -704,7 +732,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | 阶段 | 交付 | 验收信号 | 人天 |
 |---|---|---|---|
 | **P4 Workflow + RPA** | Dify 十二项场景、模拟遗留 ERP Web UI、Playwright RPA、API 超时自动降级、影刀流程设计文档 | 「API 挂掉 → RPA 兜底 → 回填结果」可演示 | 7 |
-| **P5 评测 + 交付物** | ≥40 条测试集、M1/M2/M3/M4 四档评测、**10 并发压测**、**向量库切换验证（Qdrant → pgvector 重跑评测）**、架构文档、WBS、API 文档、落地手册、部署运维、资源计划报告、**《向量数据纳管服务设计》** | 报告出数，给出选型建议 | 6.5 |
+| **P5 评测 + 交付物** | ≥40 条测试集、M1/M2/M3/M4 四档评测、**10 并发压测**、**向量库切换验证（pgvector → Qdrant 重跑评测）**、架构文档、WBS、API 文档、落地手册、部署运维、资源计划报告、**《向量数据纳管服务设计》** | 报告出数，给出选型建议 | 6.5 |
 
 ### 工期换算
 
@@ -737,8 +765,8 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | R7 | 十二项 Dify 场景范围较大 | 工期超支 | 里程碑一为完整交付切点，中期可据反馈砍 P4/P5 范围 |
 | R8 | 双 BU 使数据与文档工作量翻倍 | 工期超支 | 共用同构数据模型，仅属性字段差异化 |
 | R9 | 工具函数中混入同步阻塞调用 | 并发直接塌方，延迟指标失真 | 全链路 async 强制约束 + lint 规则拦截；压测作为兜底检出手段 |
-| R10 | Dify 当期版本对 Qdrant 的支持情况未核实 | 向量后端选型返工 | P1 核实支持清单；若不支持则回退 pgvector，`VectorStorePort` 使应用侧不受影响 |
-| R11 | 后续有人绕过 Dify 直接写向量库 | 引用溯源断裂，击穿 ≥85% 引用准确率指标 | §8.4 写入权模型写入设计文档并在代码中以接口分层强制；`VectorStorePort` 写侧本期不提供实现 |
+| R10 | Dify 当期版本对 pgvector 的表结构与索引类型未核实 | 向量后端选型返工 | P1 核实支持清单与索引实现；`VectorStorePort` 使应用侧不受影响 |
+| R11 | 后续有人绕过 Dify 直接写向量库 | 引用溯源断裂，击穿 ≥85% 引用准确率指标 | §8.4 写入权模型写入设计文档并在代码中以接口分层强制；`VectorStorePort` 写侧本期不提供实现。**pgvector 下该风险更高**——向量表与业务表同库，SQL 可直达，须以数据库账号权限隔离：应用账号对 `dify` 库只读 |
 
 ---
 
