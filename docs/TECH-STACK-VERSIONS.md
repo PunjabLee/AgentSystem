@@ -2,8 +2,8 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | v1.0 |
-| 核实日期 | **2026-08-28** |
+| 版本 | v1.1 |
+| 核实日期 | **2026-08-28**（v1.1 补充 PostgreSQL 18 兼容性评估） |
 | 核实方式 | 直接查询 PyPI JSON API、npm registry、GitHub Releases API、endoflife.date API、Dify 源码 |
 | 关联 | [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) v1.6 · [项目宪法](CONSTITUTION.md) |
 
@@ -22,6 +22,10 @@
 | 5 | **Dify 2.0 仍处 beta**，8 周周期内可能转正——本项目锁定 1.17.0 不追 | ⚠️ 已登记风险 |
 | 6 | **TypeScript 7 是 Go 原生重写版**，绿地项目无迁移负担但周边工具可能滞后 | ⚠️ P3 观察 |
 | 7 | Ubuntu **25.04 / 25.10 均已 EOL**，AutoDL 选镜像时不可选用 | ⚠️ 选型约束 |
+| 8 | **PostgreSQL 改用 18.6**。pgvector 0.8.6 明确支持（CI 矩阵含 PG18 + 官方 `pg18` 镜像） | ✅ 硬证据 |
+| 9 | **asyncpg 0.31.0 未声明支持 PG 18**，需 P1 实测；退路是切 psycopg3 async（改一行连接串） | ⚠️ P1 必测 |
+| 10 | **Dify compose 钉 `postgres:15-alpine` / `pgvector:pg16`**，指向外部 PG 18 超出其测试矩阵，需 P1 实测 | ⚠️ P1 必测 |
+| 11 | **阿里云 RDS 是否提供 PG 18 尚未查证**——若目标 RDS 仅到 17，本决策应推翻 | ❓ 待用户确认 |
 
 ---
 
@@ -99,7 +103,7 @@
 
 | 组件 | 推荐版本 | 最新版（核实日） | 说明 |
 |---|---|---|---|
-| **PostgreSQL** | **17** | 18（EOL 2030-11-14） | 选 17（EOL 2029-11-08）：云 RDS 普遍支持，pgvector 0.8.x 兼容成熟。若目标 RDS 已提供 18 则可用 18 |
+| **PostgreSQL** | **18.6** | 18.6（2025-09-25 发布，EOL 2030-11-14） | 已迭代 6 个小版本。兼容性评估见 §9 |
 | **pgvector 扩展** | **0.8.6** | v0.8.6 | 该项目以 git tag 发布，无 GitHub Release |
 | **Dify** | **1.17.0** | 1.17.0（2026-08-25） | 2.0.0-beta.2 在测，本项目**锁定 1.17.0 不追 2.0** |
 | **vLLM** | **0.28.0** | 0.28.0（2026-08-26） | `requires_python: >=3.10,<3.15` |
@@ -107,6 +111,57 @@
 | PyTorch（vLLM 依赖） | 随 vLLM 版本 | 2.13.0 | AutoDL 镜像自带，不单独指定 |
 
 **生产数据库建议**：本机 PostgreSQL 仅用于 PoC 与开发。若 PoC 后进入实际使用，应迁移至云 RDS 以获得稳定性、自动备份与高可用保障——RDS 需确认已启用 `pgvector` 扩展。
+
+---
+
+## 9. PostgreSQL 18 兼容性评估
+
+**决策**：由 17 改用 **18.6**（发布 2025-09-25，EOL 2030-11-14，已迭代 6 个小版本）。
+
+### 逐组件兼容性
+
+| 组件 | 结论 | 证据 |
+|---|---|---|
+| **pgvector 0.8.6** | ✅ **明确支持** | CI 工作流矩阵含 `postgres-version: 18`；官方镜像有 `0.8.6-pg18`、`pg18-trixie`、`pg18-bookworm` |
+| psycopg 3.3.4 | ✅ 低风险 | 基于 libpq，客户端连新版服务端为标准做法 |
+| SQLAlchemy 2.0.52 | ✅ 低风险 | 方言层，不依赖 PG 具体版本特性 |
+| alembic 1.19.1 | ✅ 低风险 | 迁移 DDL 在 PG 18 向后兼容 |
+| **asyncpg 0.31.0** | ⚠️ **未声明，P1 必测** | 见下 |
+| **Dify 1.17.0** | ⚠️ **超出测试矩阵，P1 必测** | 见下 |
+
+### asyncpg：证据边界要说清楚
+
+asyncpg **自行实现 PostgreSQL 线协议**（不走 libpq），因此对 PG 大版本敏感。其惯例是每支持一个新 PG 大版本即在 release notes 明确声明：
+
+| 版本 | 日期 | 声明 |
+|---|---|---|
+| v0.29.0 | 2023-11-05 | "Python 3.12 and PostgreSQL 16 support" |
+| v0.30.0 | 2024-10-20 | "Support Python 3.13 and PostgreSQL 17" |
+| **v0.31.0** | **2025-11-24** | **未见 PostgreSQL 18 声明**（PG 18 已于两个月前发布） |
+
+**本次仅核实 release notes 文本，未实测连接。** 此证据不足以断定不兼容，也不足以断定兼容。
+
+**退路（成本极低）**：技术栈中已同时存在 psycopg 3.3.4（`langgraph-checkpoint-postgres` 本就依赖它），且 psycopg3 原生支持 async。若 asyncpg 在 PG 18 上失败，连接串由 `postgresql+asyncpg://` 改为 `postgresql+psycopg://` 即可，psycopg3 基于 libpq，对新版 PG 兼容性天然更好。
+
+### Dify：超出其测试矩阵
+
+Dify 1.17.0 的 `docker-compose.yaml` 钉死 `postgres:15-alpine`（元数据库）与 `pgvector/pgvector:pg16`（向量库）。将其指向外部 PG 18 属于 Dify 未测试的组合。Dify 经 SQLAlchemy + psycopg 访问数据库、以 Alembic 做迁移，PG 18 对普通 SQL 与迁移操作向后兼容，风险中等偏低，但必须实测。
+
+### 收益的诚实评估
+
+PG 18 的新特性（异步 I/O、UUIDv7、虚拟生成列、B-tree skip scan）**对本 PoC 基本用不上**——几千 chunk 向量与 100 条/表业务数据的规模下，17 与 18 的性能差异不可观测。**真实收益仅为 EOL 多一年**（2030-11-14 vs 2029-11-08）。
+
+### 因此：验证前置到 P1 第一天
+
+现在验证的沉没成本为零，失败即退回 PG 17；后期再迁移的成本远高于此刻验证。验证清单（合计约 0.5 人天，已含在 P1 内）：
+
+- [ ] 起 PG 18.6 容器，装 pgvector 0.8.6，建 HNSW 索引跑通
+- [ ] asyncpg 0.31.0 连接 PG 18，跑基础 CRUD 与类型往返；失败则切 psycopg3 async
+- [ ] `langgraph-checkpoint-postgres` 3.1.2 在 PG 18 上建表并读写检查点
+- [ ] Dify 1.17.0 指向外部 PG 18，跑通 Alembic 迁移 → 建知识库 → 索引一份文档 → 检索出结果
+- [ ] 任一项失败即整体退回 PG 17（版本矩阵与设计文档同步回滚）
+
+> ❓ **需用户确认的前置条件**：**阿里云 RDS 是否已提供 PostgreSQL 18 未经查证**。若目标 RDS 仅支持到 17，则以 18 开发反而制造迁移障碍，本决策应予推翻。已登记为待决事项 Q5。
 
 ---
 
