@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | v1.0 |
+| 版本 | v1.1（显存实测修正） |
 | 日期 | 2026-08-29 |
 | 用途 | P0-7 / P1 出口判据 / M1·M2 全部评测 |
 | 关联 | [P0 验证结果](P0-VERIFICATION.md) · [WBS 依赖 D1](WBS.md) · [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) |
@@ -39,18 +39,39 @@ A100 是 Ampere，**没有 FP8/FP4 张量核心**。加载量化权重只能 wei
 
 **KV/token = 64 层 × 4 kv_heads × 256 head_dim × 2(K,V) × 2 B = 256 KiB**（BF16 KV；FP8 减半，NVFP4 再减半）
 
-### 5090 32G + NVFP4
+### ⚠️ v1.1 修正：量化权重实测体积远大于估算
+
+**Qwen3.5 / 3.8 是多模态模型**（`vision_config`：27 层 / hidden 1152），而**视觉塔在所有量化版本中都被排除在量化之外**：
+
+```
+未量化模块: ['model.visual.blocks.0.attn.qkv', 'model.visual.blocks.0.attn.proj', ...]
+```
+
+v1.0 按纯文本模型估的「NVFP4 约 14 GiB」不成立。实测：
+
+| 权重仓库 | 实测体积 | 32G 卡可行性 |
+|---|---|---|
+| `RedHatAI/Qwen3.8-27B-INT4` | **18.1 GiB** | ✅ **推荐** |
+| `cyankiwi/Qwen3.8-27B-AWQ-INT4` | 19.6 GiB | ✅ 可行，余量更小 |
+| `Qwen/Qwen3.5-27B-GPTQ-Int4`（官方） | **28.2 GiB** | ❌ **装不下** |
+| `Qwen/Qwen3.8-27B-FP8`（官方） | 28.7 GiB | ❌ 装不下 |
+
+> **官方量化在 32G 卡上都用不了。** v1.0 曾以「官方量化比社区量化成熟」为由倾向 Qwen3.5，该论据在 32G 卡上不适用——只有 18–20 GiB 的社区 INT4 装得下。
+
+### 5090 32G + INT4（18.1 GiB）
 
 ```
 可用 31.4 GiB × --gpu-memory-utilization 0.92 = 28.9 GiB
-  − 权重 14.0  − 运行时/激活 2.5  =  KV 可用 12.4 GiB
+  − 权重 18.1  − 运行时/激活 2.5  =  KV 可用 8.3 GiB
 ```
 
-| KV 精度 | KiB/token | 总容量 | 10 并发每路 |
-|---|---|---|---|
-| BF16 | 256 | 50.7K token | 5.1K |
-| **FP8** | 128 | **101.5K** | **10.1K** |
-| NVFP4 | 64 | 203.0K | 20.3K |
+| KV 精度 | KiB/token | 总容量 | 10 并发每路 | 达标 |
+|---|---|---|---|---|
+| BF16 | 256 | 34.0K token | 3.4K | ❌ **差一点** |
+| **FP8** | 128 | **68.0K** | **6.8K** | ✅ |
+| NVFP4 | 64 | 136.0K | 13.6K | ✅ |
+
+🔴 **`--kv-cache-dtype fp8` 在 5090 上是必须项，不是可选项。** BF16 KV 的 34K 容量低于 10 并发所需的 35K。Blackwell 原生支持 FP8 KV，开启无损耗。
 
 ### A100 80G + BF16
 
@@ -66,7 +87,7 @@ A100 是 Ampere，**没有 FP8/FP4 张量核心**。加载量化权重只能 wei
 
 **需求基线：10 并发 × 3.5K token（RAG prompt + 输出）= 35K token。**
 
-**两种卡在默认 KV 精度下均已满足**，无强制要求开 FP8 KV。5090 建议开 FP8 KV 取 3 倍余量（Blackwell 原生支持，无损耗）。
+**A100 在默认 BF16 KV 下已满足；5090 必须开 FP8 KV**（见上，BF16 KV 的 34K 低于 35K 需求）。
 
 ---
 
@@ -96,7 +117,7 @@ A100 是 Ampere，**没有 FP8/FP4 张量核心**。加载量化权重只能 wei
 | CUDA + PyTorch + vLLM 环境 | 20–25 GB | torch 与 CUDA 库本身很大 |
 | pip / uv 缓存 | 5–8 GB | 可清理 |
 | **Qwen3.8-27B BF16** | **51.7 GiB** | M2 用 |
-| **Qwen3.8-27B NVFP4** | **~14–16 GiB** | M1 用 |
+| **Qwen3.8-27B INT4**（含未量化视觉塔） | **18.1 GiB** | M1 用 |
 | vLLM 编译缓存（torch.compile / CUDA graph） | 2–5 GB | 首次启动生成 |
 | 日志与杂项 | 5 GB | |
 
@@ -104,9 +125,9 @@ A100 是 Ampere，**没有 FP8/FP4 张量核心**。加载量化权重只能 wei
 
 | 实例用途 | 实需 | **建议数据盘** |
 |---|---|---|
-| 只跑 M1（5090 + NVFP4） | ~60 GB | **100 GB** |
+| 只跑 M1（5090 + INT4） | ~65 GB | **100 GB** |
 | 只跑 M2（A100 + BF16） | ~95 GB | **150 GB** |
-| **同一实例上两个都要** | ~111 GB | **200 GB** |
+| **同一实例上两个都要** | ~115 GB | **200 GB** |
 
 > ⚠️ **下载缓存双份风险**：若 HuggingFace 缓存目录与实际加载路径未用软链接，同一模型会存两份。BF16 模型双份就是 103 GiB。务必确认 `HF_HOME` / `MODELSCOPE_CACHE` 指向数据盘，且不做二次拷贝。
 
@@ -155,25 +176,27 @@ modelscope download --model Qwen/Qwen3.8-27B --local_dir /root/autodl-tmp/models
 | 档位 | 仓库 | 体积 |
 |---|---|---|
 | **M2** | `Qwen/Qwen3.8-27B` | 51.7 GiB |
-| **M1**（5090） | NVFP4 量化版，见下 | ~14–16 GiB |
-| M1（若用 4090） | `RedHatAI/Qwen3.8-27B-INT4` | ~14 GiB |
+| **M1**（5090 或 4090） | **`RedHatAI/Qwen3.8-27B-INT4`** | **18.1 GiB** |
 
-> **M1 的 NVFP4 权重需在 P0-7 时确认具体仓库。** 已知候选：`TelperionAI/Qwen3.8-27B-NVFP4-AWQ-AutoRound`、`YCWTG/Qwen3.8-27B-NVFP4A16-GPTQ`、`cloudnathan5/Qwen3.8-27B-NVFP4a16-GPTQ`。这些下载量都不高（100–700），**不如 4090 路线的 `RedHatAI/...-INT4`（↓115K，出自 vLLM 维护方 Neural Magic）成熟**。若 NVFP4 权重在 vLLM 上跑不通，退路是用 INT4——5090 上 INT4 同样能跑，只是放弃 FP4 的硬件加速。
+> **M1 统一用 `RedHatAI/Qwen3.8-27B-INT4`（18.1 GiB，↓115K，出自 vLLM 维护方 Neural Magic）**，5090 与 4090 通用。
+>
+> NVFP4 候选（`TelperionAI/...-NVFP4-AWQ-AutoRound` 等）下载量仅 100–700，成熟度远不及。**在 5090 上可作为 P5 的额外数据点尝试**（Blackwell 原生加速 FP4，理论更快），但不作为主路径——PoC 的关键路径不应押在下载量三位数的权重上。
 
 ---
 
 ## 7. vLLM 启动参数
 
-### M1 · 5090 32G · NVFP4
+### M1 · 5090 32G · INT4
 
 ```bash
-vllm serve /root/autodl-tmp/models/Qwen3.8-27B-NVFP4 \
+vllm serve /root/autodl-tmp/models/Qwen3.8-27B-INT4 \
   --served-model-name qwen3.8-27b \
   --host 127.0.0.1 --port 8000 \
   --gpu-memory-utilization 0.92 \
   --max-model-len 16384 \
   --max-num-seqs 16 \
   --kv-cache-dtype fp8 \
+  --limit-mm-per-prompt '{"image":0,"video":0}' \
   --enable-auto-tool-choice --tool-call-parser hermes
 ```
 
@@ -196,6 +219,8 @@ vllm serve /root/autodl-tmp/models/Qwen3.8-27B \
 | `--enable-auto-tool-choice --tool-call-parser hermes` | **工具调用以纯文本留在 `content` 里，`tool_calls` 为空**，表现为"模型不会用工具"，极易误判成模型能力问题，浪费半天到一天 |
 | `--max-model-len 16384` | 模型原生 ctx 是 **262144**，不限制则 vLLM 按 256K 预留 KV，显存瞬间不够 |
 | `--host 127.0.0.1` | 默认 `0.0.0.0` 会把推理端口暴露在实例网络上，SSH 隧道给的安全感是假的 |
+| `--kv-cache-dtype fp8`（**仅 5090**） | BF16 KV 只有 34K 容量，低于 10 并发所需的 35K |
+| `--limit-mm-per-prompt`（可选） | 本项目只用文本。禁用多模态输入可省下视觉相关的预分配 |
 
 ---
 
@@ -242,7 +267,7 @@ autossh -M 0 -N \
 
 - [ ] `nvidia-smi` 卡型与显存正确；`torch.cuda.get_device_capability()` 5090 应为 `(12, 0)`
 - [ ] 数据盘容量足够且 `MODELSCOPE_CACHE` / `HF_HOME` 指向数据盘
-- [ ] 模型下载完成，体积与预期相符（BF16 51.7 GiB / NVFP4 ~14 GiB）
+- [ ] 模型下载完成，体积与预期相符（BF16 **51.7 GiB** / INT4 **18.1 GiB**）
 - [ ] `vllm serve` 启动无 OOM，日志中 KV cache 块数符合 §2 测算
 - [ ] `curl 127.0.0.1:8000/v1/models` 返回模型
 - [ ] **`tool_calls` 验证**：发一个带 `tools` 的请求，响应必须返回**结构化 `tool_calls` 字段**，而不是把工具调用写在 `content` 里
