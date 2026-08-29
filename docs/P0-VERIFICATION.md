@@ -19,10 +19,11 @@
 | 5 | langgraph-checkpoint-postgres 3.1.2 | ✅ 通过 | — |
 | 6 | psycopg3 async 退路 | ✅ 可用 | 退路仍在 |
 | 7 | 前端栈（React 19 + antd 6 + Vite 8 + TS 7） | ✅ 通过 | **TS 7 不必回退** |
-| 8 | Dify 单实例整合 + 容器内存实测 | 🟡 **部分完成** | 单实例达成，但 PG 仍归 Dify compose 管，见 §6 |
+| 8 | Dify 外部单实例整合 + 内存实测 | ✅ **完成**（方案 B） | 见 §7 |
 | 9 | RAG spike（引用可溯源） | ⏸ 未执行 | 依赖 Dify |
 | 10 | AutoDL + vLLM（含 tool_calls） | ⏸ **转待办** | 用户决定优先走厂商 API，M1/M2 延后 |
-| 11 | 托管档 M3 / M4 | ✅ **已定** | AutoDL.Art `Qwen3.5-397B-A17B` + DeepSeek 官方 `deepseek-v4-flash`，两个 key 用户已具备 |
+| 11 | 托管档 M3 | ✅ **实测通过** | Function Calling 正常，见 §8 |
+| 12 | 托管档 M4 | 🔴 **Key 被拒** | DeepSeek 官方返回 api key invalid，见 §8 |
 
 ---
 
@@ -293,3 +294,96 @@ Docker Desktop 分配 **7.75 GiB**，实际占用 2.13 GiB。
 | **B** | 起独立 PG 容器，Dify 经 `host.docker.internal` 指向它 | 符合设计原意，生命周期解耦，`down -v` 不再危及业务数据 | 需迁移现有 `dify` / `dify_plugin` 两库（当前数据极小，成本近零） |
 
 **推荐 B**。现在数据量微不足道（`apps=1`、知识库 0），迁移成本几乎为零；等 P2 灌入业务数据、P3 建好知识库后再迁，代价会高一个量级。
+
+
+---
+
+## 8. 方案 B 迁移完成 · 外部权威 PostgreSQL
+
+### 最终拓扑
+
+```
+agentsystem-pg  (pgvector/pgvector:pg18, 宿主 127.0.0.1:5432)   ← 唯一权威实例
+  ├── agentsystem   业务数据 + 审计 + checkpointer（P1/P2 建表）· vector 0.8.6
+  ├── dify          Dify 元数据 + pgvector 向量       · vector 0.8.6
+  └── dify_plugin   Dify 插件元数据
+
+Dify 13 容器（无自带 PG、无 weaviate），经 host.docker.internal:5432 接入
+```
+
+| 验证项 | 结果 |
+|---|---|
+| PostgreSQL 实例数 | **1** ✅ |
+| Dify 容器内 PG | **0** ✅ |
+| weaviate | **0** ✅ |
+| Dify 实际连接外部实例 | ✅ `dify: 3 连接`、`dify_plugin: 1 连接` |
+| Dify api 日志数据库错误 | **0 行** ✅ |
+| 数据完好 | `apps=1  tenants=1  datasets=0` ✅ |
+| 宿主可达（供宿主侧 FastAPI 连接） | ✅ `127.0.0.1:5432` |
+| collation 版本 | ✅ 一致（全新实例，无历史包袱） |
+| 容器内存合计 | **2.25 GiB** / Docker 分配 7.75 GiB |
+
+**`docker compose down -v` 风险已解除**——PG 由独立容器持有（named volume `agentsystem-pgdata`，`--restart unless-stopped`），不再受 Dify compose 生命周期影响。
+
+### 🔴 PostgreSQL 18 更改了 Docker 镜像的挂载约定
+
+首次建容器失败，日志给出原因：
+
+> The suggested container configuration for **18+** is to place a single mount at `/var/lib/postgresql` which will then place PostgreSQL data in a subdirectory, allowing usage of `pg_upgrade --link` without mount point boundary issues.
+
+**PG 18+ 必须挂载 `/var/lib/postgresql`，不能挂 `/var/lib/postgresql/data`**（PG 17 及更早的惯例）。
+
+注意 Dify 官方 compose 仍用旧约定（bind mount 到 `/var/lib/postgresql/data` + 显式 `PGDATA=/var/lib/postgresql/data/pgdata`），能跑通但偏离 18+ 推荐形态。这是从 17 升 18 时的常见踩坑点，须写入部署文档。
+
+---
+
+## 9. 托管档实测
+
+### M3 · AutoDL.Art · `Qwen3.5-397B-A17B` ✅
+
+| 项 | 值 |
+|---|---|
+| base_url | `https://www.autodl.art/api/v1`（另有 `/anthropic` 提供 Anthropic 格式） |
+| `GET /models` | ❌ 404，端点未实现——无法通过 API 枚举模型 |
+| 对话 | ✅ |
+| **Function Calling** | ✅ **`finish_reason: tool_calls`，结构化返回，参数抽取正确** |
+
+工具调用实测（S2 库存场景）：
+
+```
+→ query_inventory({"region": "华东", "product_line": "岩板"})
+```
+
+### 🔴 thinking 默认开启，代价远超预估
+
+同一个问题（「用一句话说明什么是岩板」，`max_tokens=200`）的实测：
+
+| 配置 | completion_tokens | reasoning_tokens |
+|---|---|---|
+| **基线（不加参数）** | **1193** | **1168 —— 占 98%** |
+| `enable_thinking: false`（顶层） | **37** | 0 ✅ |
+| `thinking: {"type":"disabled"}` | **24** | 0 ✅ |
+| `chat_template_kwargs.enable_thinking` | — | ❌ 返回非 JSON |
+
+**关闭 thinking 后输出 token 减少约 32 倍。**
+
+这直接推翻 §6 记录的成本基线。按输出单价 ¥4.32/M：
+
+| 场景 | 294 次调用的输出成本 |
+|---|---|
+| thinking 开启（约 1200 输出 tok/次） | **约 ¥1.52** |
+| thinking 关闭（约 40 输出 tok/次） | **约 ¥0.05** |
+
+绝对值仍然很小，但**比例关系必须写入 TCO 模型**——规模化后按真实调用量放大，thinking 的开销会成为托管方案成本的主导项。同时它也直接决定延迟指标能否达标。
+
+**M3 关闭方式确定：请求体顶层 `enable_thinking: false`。**
+
+### 🔴 M4 · DeepSeek 官方 —— Key 被拒
+
+```
+Authentication Fails, Your api key is invalid
+```
+
+`.env` 中的 `DEEPSEEK_API_KEY` 被 DeepSeek 官方 API 拒绝。M4 档暂不可用，其 thinking 关闭方式也因此未能实测。**需用户核对该 Key。**
+
+另：`.env` 中仍残留已废弃的 `DASHSCOPE_API_KEY`（百炼方案已放弃），建议清理。
