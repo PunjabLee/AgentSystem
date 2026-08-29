@@ -19,10 +19,10 @@
 | 5 | langgraph-checkpoint-postgres 3.1.2 | ✅ 通过 | — |
 | 6 | psycopg3 async 退路 | ✅ 可用 | 退路仍在 |
 | 7 | 前端栈（React 19 + antd 6 + Vite 8 + TS 7） | ✅ 通过 | **TS 7 不必回退** |
-| 8 | Dify 指向外部 PG + 13 容器内存实测 | ⏸ 未执行 | 待办 |
+| 8 | Dify 单实例整合 + 容器内存实测 | 🟡 **部分完成** | 单实例达成，但 PG 仍归 Dify compose 管，见 §6 |
 | 9 | RAG spike（引用可溯源） | ⏸ 未执行 | 依赖 Dify |
-| 10 | AutoDL + vLLM（含 tool_calls） | ⏸ **阻塞** | 需实例与凭据 |
-| 11 | M3 百炼可用性 | 🔴 **阻塞** | `.env` 中的 key 无效，见 §5 |
+| 10 | AutoDL + vLLM（含 tool_calls） | ⏸ **转待办** | 用户决定优先走厂商 API，M1/M2 延后 |
+| 11 | 托管档 M3 / M4 | ✅ **已定** | AutoDL.Art `Qwen3.5-397B-A17B` + DeepSeek 官方 `deepseek-v4-flash`，两个 key 用户已具备 |
 
 ---
 
@@ -202,3 +202,94 @@ echo 'DASHSCOPE_API_KEY=sk-你的真实key' >> .env
 | B5 | RAG spike（引用可溯源） | 依赖 B4 | 下一步 |
 
 **验证容器 `poc-pg18` 仍在运行**（端口 55432）。不再需要时：`docker rm -f poc-pg18`
+
+
+---
+
+## 7. P0-5 · Dify 单实例整合实测（2026-08-29）
+
+### 结果
+
+| 目标 | 结果 |
+|---|---|
+| 消除多余的 PostgreSQL 实例（R15） | ✅ **Dify 侧 PostgreSQL 实例数 = 1** |
+| 消除 weaviate | ✅ **0 个** |
+| `dify` 库启用 pgvector | ✅ **vector 0.8.6 已装** |
+| 数据完好 | ✅ `apps=1` 与改动前一致，三个库齐全 |
+| `COMPOSE_PROFILES` 字面量覆写 | ✅ 插值已去除 |
+| **Dify 指向真正的外部 PG** | 🟡 **未达成**，见「遗留」 |
+| 容器内存实测 | ✅ **14 个容器合计 2.13 GiB** |
+
+改动前完整备份于 `/Users/punjab/Documents/Workspace/dify/backup-20260829-165824/`（`.env`、`docker-compose.yaml`、两个库的 `pg_dump -Fc`）。
+
+### R15 完全证实
+
+`.env` 实测：
+
+```
+COMPOSE_PROFILES=${VECTOR_STORE:-weaviate},${DB_TYPE:-postgresql},collaboration
+```
+
+确为**插值派生**。设 `VECTOR_STORE=pgvector` 会使 `pgvector` 自动回到 profiles 并拉起第二个 PostgreSQL 容器。已覆写为字面量 `postgresql,collaboration`。
+
+**时机极佳**：改动前知识库 0 个、文档 0 个，切换向量后端**零损失**，无需重新索引。
+
+### 两处此前未核实的变量名，一对一错
+
+| R15 / 版本矩阵 §6 所写 | 实测（源码 `PGVectorConfig`） |
+|---|---|
+| `PGVECTOR_HOST` / `PGVECTOR_PORT` / `PGVECTOR_DATABASE` | ✅ 名字正确 |
+| （未提及端口默认值） | 🔴 **`PGVECTOR_PORT` 源码默认 5433**，而目标实例在容器网内是 **5432**，不显式设则连不上 |
+
+权威变量名（`api/configs/middleware/vdb/pgvector_config.py`）：`PGVECTOR_HOST` · `PGVECTOR_PORT`(默认5433) · `PGVECTOR_USER` · `PGVECTOR_PASSWORD` · `PGVECTOR_DATABASE` · `PGVECTOR_MIN_CONNECTION` · `PGVECTOR_MAX_CONNECTION` · `PGVECTOR_PG_BIGM`。
+
+注意是 `PGVECTOR_USER` 而非 `PGVECTOR_USERNAME`。
+
+### 另一处坑：官方 postgres 镜像不含 pgvector
+
+用户原先将 Dify 的 `db_postgres` 改为 `postgres:18.6`。该官方镜像**不含 pgvector 扩展**——`pg_available_extensions` 中查不到 `vector`。已改为 `pgvector/pgvector:pg18`（数据为 bind mount，PG 18→18 大版本一致，数据兼容）。
+
+### 换镜像引入 collation 版本不匹配（已修复）
+
+```
+database "dify" has a collation version mismatch
+created using collation version 2.41, but the OS provides version 2.36
+```
+
+原因：`postgres:18.6` 基于 **Debian 13**（pgdg13），`pgvector/pgvector:pg18` 基于 **Debian 12**（pgdg12），glibc 不同导致排序规则版本回退。会影响文本列 B-tree 索引的正确性。
+
+已对 `postgres` / `dify` / `dify_plugin` 三库执行 `REINDEX DATABASE` + `ALTER DATABASE ... REFRESH COLLATION VERSION`，警告消失。当时数据量极小，成本接近零。
+
+> **通用教训**：跨镜像基础发行版更换 PostgreSQL 容器时，即使 PG 大版本相同，也须检查并修复 collation 版本。数据量大时 `REINDEX` 代价很高，应在数据积累前完成迁移。
+
+### 内存：评审的担忧被证伪
+
+| 来源 | 估算 | 实测 |
+|---|---|---|
+| 设计文档 v1.1 | Dify 约 3.5 GiB | — |
+| DevOps 评审重估 | 3.6–7.0 GiB，中位 **5 GiB** | — |
+| **实测（14 容器）** | — | **2.13 GiB** |
+
+分项（重启后）：`api` 415 MiB · `api_websocket` 407 MiB · `worker_beat` 397 MiB · `worker` 399 MiB · `web` 118 MiB · `agent_backend` 111 MiB · `plugin_daemon` 82 MiB · `sandbox` 66 MiB · `db_postgres` 46 MiB · 其余各 ≤38 MiB。
+
+Docker Desktop 分配 **7.75 GiB**，实际占用 2.13 GiB。
+
+**因此评审建议的内存优化（`CELERY_WORKER_AMOUNT=1`、去掉 `collaboration` profile）本期不做**——余量充足，改动只会增加与官方部署的偏离。「16 GB 扛不住 Dify」这一自 v1.1 起悬挂多版的担忧可以关闭。
+
+### 🟡 遗留：PG 仍归 Dify compose 管，且不对宿主暴露
+
+当前形态是「Dify 自带的 `db_postgres` 升级为 pgvector 并吞下向量存储」，**不是设计所要求的「外部唯一权威实例」**。两个后果：
+
+| 问题 | 影响 |
+|---|---|
+| `db_postgres` **无 `ports` 映射**，宿主 `127.0.0.1:5432` 不通 | 跑在宿主机上的 FastAPI **连不上**，P1 直接受阻 |
+| PG 生命周期由 Dify 的 compose 掌管 | 在 Dify 目录执行 `docker compose down -v` 会**连业务库与审计日志一并销毁**——正是 DevOps 评审警告的那个杀手，现在风险更实 |
+
+**两条处置路径**：
+
+| | 做法 | 得 | 失 |
+|---|---|---|---|
+| **A** | 给 `db_postgres` 加 `ports: 5432:5432` | 改动最小，宿主可达 | 生命周期仍与 Dify compose 耦合；偏离官方 compose |
+| **B** | 起独立 PG 容器，Dify 经 `host.docker.internal` 指向它 | 符合设计原意，生命周期解耦，`down -v` 不再危及业务数据 | 需迁移现有 `dify` / `dify_plugin` 两库（当前数据极小，成本近零） |
+
+**推荐 B**。现在数据量微不足道（`apps=1`、知识库 0），迁移成本几乎为零；等 P2 灌入业务数据、P3 建好知识库后再迁，代价会高一个量级。
