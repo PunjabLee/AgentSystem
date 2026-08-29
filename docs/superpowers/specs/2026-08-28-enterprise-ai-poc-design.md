@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v1.8（专家团评审重排） |
+| 文档版本 | v2.0（模型档位定稿） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 织染（印染事业部）+ 瓷砖洁具（建陶卫浴事业部）双事业部制造集团 |
@@ -20,7 +20,7 @@
 | 前缀 | 含义 | 范围 |
 |---|---|---|
 | `S1`–`S5` | 主线业务场景 | §3.3 |
-| `M0`–`M3` | 模型部署档位 | §6.1 |
+| `M0`–`M4` | 模型部署档位 | §6.1 |
 | `L1`–`L7` | LangGraph 承担的场景 | §7.3 |
 | `D1`–`D12` | Dify 承担的场景 | §7.4 |
 | `R1`–`R16` | 风险项 | §16 |
@@ -39,6 +39,7 @@
 | v1.6 | 2026-08-28 | 全栈版本核实（新增 [technical-stack-versions](../../TECH-STACK-VERSIONS.md)）。直接查询 PyPI、npm、GitHub Releases、endoflife.date 与 Dify 源码，非凭记忆填写。确认无依赖冲突：Python 3.14.6 的全部关键依赖均有预编译轮子（`pydantic-core`、`asyncpg`、`psycopg-binary`、`torch`、`greenlet`、`tiktoken` 均有 cp314；`ruff` 与 `playwright` 发 ABI 无关的 `py3-none-<平台>` 轮子）；Node 24.18 为 LTS 且满足 Vite 8 要求。确定 PostgreSQL 18、Dify 1.17.0、vLLM 0.28.0、pgvector 0.8.6、Ubuntu 24.04 LTS（25.04/25.10 已 EOL 不可用）。关闭 R10——Dify 源码确认支持 pgvector。新增 R14（Dify 2.0 beta 误升级）与 R15（**Dify 默认 compose 会额外起一个 PostgreSQL 容器，不干预将出现三个 PG 实例，彻底违背 pgvector 选型初衷**）。确立版本锁定策略：`uv.lock` 与 `package-lock.json` 提交进 git |
 | v1.7 | 2026-08-28 | PostgreSQL 由 17 改用 **18.6**（EOL 2030-11-14，较 17 多一年）。逐组件核实：pgvector 0.8.6 明确支持（CI 矩阵含 PG18、官方 `pg18` 镜像，硬证据）；psycopg / SQLAlchemy / alembic 低风险。**两处需实测**：asyncpg 0.31.0 自实现线协议且 release notes 未声明 PG 18（v0.29 声明 PG16、v0.30 声明 PG17，v0.31 未提 PG18），Dify 1.17 的 compose 钉 `postgres:15-alpine` / `pgvector:pg16` 属未测组合。**诚实记录收益**：PG 18 新特性对本 PoC 规模基本用不上，真实收益仅 EOL 多一年——故采取「验证前置到 P1 第一天」而非「先用 17 以后再迁」，此刻验证的沉没成本为零。新增 R16 与待决 Q5（阿里云 RDS 是否提供 PG 18 未查证，若仅到 17 则本决策应推翻） |
 | v1.8 | 2026-08-28 | 六位专家并行评审后重排（[合并报告](../../REVIEW-PANEL-2026-08-28.md)）。用户确认：AI 辅助中等、人天不设限、8 周非硬约束，故**全范围保留、诚实重估**，不砍场景。**总工作量 36.0 → 62.8 人天**，日历周期 15.7 周（含缓冲约 19–20 周）——同时修正原换算把人天当日历工作日的错误，改按每周 4 有效人天。**新增 P0 前置验证周**（4.3 人天）：把真正的二元风险前移，尤其「≥85% 引用准确率是否可达」的 RAG spike 与首次 AutoDL/vLLM 部署（后者原先一天工都未计，却是 P1 验收信号的前提）。八份交付文档改为随阶段增量撰写。砍范围清单降级为缓冲耗尽时的预案，并设 P3 中点为日历决策门 |
+| v2.0 | 2026-08-29 | **模型档位定稿 M0–M4**。修正一处遗留：v1.9 对 §6.1 的更新因脚本在写盘前抛出断言而从未落盘，§6.1 至此仍是最初的 Qwen3-30B-A3B / 百炼版本，本次一并补齐。型号按 P0 实测改为 Qwen3.8-27B（立项 brief 原本就指定该型号，前八版用错）。M1 用 `unsloth/Qwen3.8-27B-NVFP4`，M2 用 BF16。**放弃同权重对比**——实地核查 AutoDL.Art 43 个托管模型确认无 Qwen3.8-27B，改为三组各自单目的的对比：M1 vs M2 仅量化（唯一单变量对比）、M2 vs M3 自建 vs 采购、M3 vs M4 托管横向。M3 = AutoDL.Art `Qwen3.5-397B-A17B`，M4 = DeepSeek 官方 `deepseek-v4-flash`（1M 上下文 / 384K 输出 / Tool Calls ✓）。记录 KV/token 因**混合注意力架构**（48 线性 + 16 全注意力）实为 64 KiB 而非 256 KiB。录入两档托管真实单价作为 TCO 首批数据。新增 thinking 模式四档四形状问题——三个模型均默认开启，§6.2 原断言「差异可收敛为三个配置项」不成立 |
 
 ---
 
@@ -321,7 +322,7 @@ CREATE TABLE audit_log (
         ┌──────────────────────────────────────────────┐
         │  模型抽象层 LLMGateway                        │
         │  M0 本机Ollama   │ M1 AutoDL 4090 (SSH)      │
-        │  M2 AutoDL A100  │ M3 阿里云百炼              │
+        │  M2 AutoDL A100  │ M3 AutoDL.Art · M4 DeepSeek │
         └──────────────────────────────────────────────┘
 ```
 
@@ -345,7 +346,8 @@ CREATE TABLE audit_log (
 |---|---|---|
 | **本机 macOS（16GB）** | PostgreSQL + pgvector（**唯一权威实例**）、Dify 全套容器、Embedding / Rerank、FastAPI + LangGraph、React dev server | 常驻 |
 | **AutoDL GPU 实例** | **仅 vLLM 推理**（M1 4090 24G / M2 A100 80G），经 SSH 端口转发接入 | **按需开关机** |
-| **阿里云百炼** | M3，OpenAI 兼容 HTTP | 托管 |
+| **AutoDL.Art 托管 API** | M3 `Qwen3.5-397B-A17B`，OpenAI 兼容 HTTP | 托管 |
+| **DeepSeek 官方 API** | M4 `deepseek-v4-flash`，OpenAI 兼容 HTTP | 托管 |
 | 本机 Ollama | M0，qwen3:8b，开发 / CI 用 | 按需，与 Dify 错峰 |
 
 #### 为什么权威数据库不能放 AutoDL
@@ -377,33 +379,91 @@ v1.1 曾判断「本机 16GB 扛不住 Dify 全家桶 + PostgreSQL」。该判�
 
 | 档位 | 部署形态 | 模型 | 角色 |
 |---|---|---|---|
-| **M0** | 本机 Ollama | Qwen3-8B | 单测 / CI 跑通链路，**不进对比结论** |
-| **M1** | AutoDL 4090 24G + vLLM（SSH 隧道） | **Qwen3-30B-A3B-AWQ** | 成本 / 延迟最优候选 |
-| **M2** | AutoDL A100 80G + vLLM（SSH 隧道） | **Qwen3-32B BF16** | 准确率上限基准 |
-| **M3** | 阿里云百炼 API | qwen3-32b | 零运维基准 |
+| **M0** | 本机 Ollama | `qwen3:8b` | 单测 / CI 跑通链路，**不进对比结论** |
+| **M1** | AutoDL **5090 32G** + vLLM（SSH 隧道） | **`unsloth/Qwen3.8-27B-NVFP4`** | **自建 · 经济档** |
+| **M2** | AutoDL **A100 80G** + vLLM（SSH 隧道） | **`Qwen/Qwen3.8-27B`（BF16）** | **自建 · 质量上限** |
+| **M3** | **AutoDL.Art 托管 API** | **`Qwen3.5-397B-A17B`** | **采购 · 同厂商** |
+| **M4** | **DeepSeek 官方 API** | **`deepseek-v4-flash`** | **采购 · 跨厂商** |
 
-> **档位由五档并为四档**：GPU 全部改用 AutoDL 后，原「自有机房 4090/A100」与「AutoDL 租用」的区分消失，原 M1/M2/M3 合并为新 M1/M2，原 M4（百炼）顺延为 M3。
->
-> ⚠️ **结论边界（必须写入 PoC 报告）**：AutoDL 是第三方 GPU 租用平台，数据出企业边界。故本次 PoC 验证的是**「自部署 vs 托管 API」的技术与成本差异**，**而非「私有化 vs 上云」的数据安全差异**。brief 所列四个对比维度中，**数据安全性一维在 AutoDL 上无法取得实测证据**，报告中只能给出架构层面的分析，真正的私有化结论需在企业自有机房复现方才成立。
+#### 型号修正（P0 实测）
 
-**核心对照组锁定 M2 vs M3**：同系列权重、同参数规格，变量仅剩「部署方式」，是唯一公平的对比。M1/M3 作为成本维度补充数据点。
+**立项 brief 指定的是「Qwen3.8 系列 27B」，该型号真实存在，本设计前八版用错了型号。** v1.0 曾断言其不存在并改用 Qwen3-32B / Qwen3-30B-A3B，理由是知识截止于 2026-05；R1 风险登记了这一条并跨越八个版本，直到 P0 才执行核实。
 
-> **4090 上的选型说明**：Qwen3-32B-AWQ 权重约 19GB，24G 卡上 KV cache 仅剩约 3GB，上下文与并发均被卡死。Qwen3-30B-A3B-AWQ 为 MoE 架构，每 token 仅激活 3B，同为 4bit 约 17GB，吞吐高出数倍，对延迟指标显著友好。
->
-> **型号核实提示**：模型命名基于 2026-05 前的公开信息。实施前应核实 Qwen 系列当期最新版本号，如有更新则同步调整。
+**实测规格**（`config.json` + safetensors 分片体积）：
+
+| 变体 | 权重 | 层结构 | 原生 ctx |
+|---|---|---|---|
+| `Qwen/Qwen3.8-27B` | **51.7 GiB** | 64 层 = **48 线性注意力 + 16 全注意力** | 262144 |
+| `unsloth/Qwen3.8-27B-NVFP4` | **21.8 GiB** | 同上 | 262144 |
+
+架构名 `Qwen3_5ForConditionalGeneration`（多模态族），**vLLM 0.28.0 registry 已注册**。
+
+**混合注意力使 KV/token = 16 × 4 kv_heads × 256 head_dim × 2 × 2 = 64 KiB**（不是按 64 层算的 256 KiB）。据此 M1 的 KV 容量 75K token、M2 为 272K，需求基线 35K，两档均大幅超标。完整测算见 [AutoDL 规格 v1.2](../../AUTODL-SPEC.md)。
+
+#### 三组对比，各自回答一个独立问题
+
+| 对比 | 变量 | 回答什么 |
+|---|---|---|
+| **M1 vs M2** | **仅量化**（同为 Qwen3.8-27B） | 量化损失值不值——全设计中唯一的单变量对比 |
+| **M2 vs M3** | 部署方式 + 模型规模 | **自建 vs 采购**：自建受显存约束只能跑 27B，采购能用上 397B |
+| **M3 vs M4** | 供应商 + 模型 | 托管方案的横向选型 |
+
+#### 为什么放弃「同权重对比」
+
+原设计的核心对照组是「同系列权重、同参数规格，变量仅剩部署方式」。**该方案已不可得**——实地核查 AutoDL.Art 托管模型市场的 43 个模型，其中没有 Qwen3.8-27B；最接近的 `Qwen3.5-397B-A17B` 是 397B 总参 / 17B 激活的 MoE，与自建的 27B 稠密模型规模相差约 15 倍。
+
+**但这反而更贴近真实决策。** 没有企业会在「自建 Qwen」与「买同一家的同一个 Qwen」之间纠结；真实选择是「自建一个显存装得下的」对「采购一个自己根本装不下的」。M2 vs M3 恰好是这个问题。
+
+**代价必须写入报告**：M2 vs M3 的准确率差异**不可归因于部署方式**，模型、供应商、部署三个变量同时改变。报告须**分场景**给出准确率，使读者能自行判断差距来自模型能力还是部署形态。
+
+> ⚠️ **结论边界（必须写入 PoC 报告）**：AutoDL 是第三方 GPU 租用平台，数据出企业边界。故本次 PoC 验证的是**「自建 vs 采购」的技术与成本差异**，**而非「私有化 vs 上云」的数据安全差异**。brief 所列四个对比维度中，**数据安全性一维无法取得实测证据**，报告中只能给出架构层面的分析，真正的私有化结论需在企业自有机房复现方才成立。
+
+#### 成本基线（P5 TCO 模型的第一批真实数据）
+
+按 P5 评测量（98 条用例 × 3 次运行 = 294 次调用，每次约 3500 输入 + 500 输出 token）：
+
+| 档 | 单价（输入 / 输出，每 M token） | 全量评测成本 |
+|---|---|---|
+| M3 `Qwen3.5-397B-A17B` | ¥0.72 / ¥4.32（会员价） | **¥1.38** |
+| M4 `deepseek-v4-flash` | ¥2.10 / ¥6.30 | **¥3.09** |
+
+**两个托管档跑完全部评测合计不足 ¥5**，而 M1/M2 的 GPU 按小时租用，数十小时下来相差两个数量级。但须同时说明：**托管成本随调用量线性增长，自建的边际成本趋近于零，交叉点在哪里正是 TCO 模型要回答的**。
 
 ### 6.2 抽象层设计
 
-远端 vLLM 与云端 API 均为 OpenAI 兼容接口，因此差异可收敛为三个配置项：
+四档远端服务均为 OpenAI 兼容接口，但差异**不能**收敛为 base_url / model / api_key 三项——见下方 thinking 模式问题。
 
 ```yaml
 # config/models.yaml
 tiers:
-  M0: { base_url: "http://localhost:11434/v1", model: "qwen3:8b",  api_key_env: null }
-  M1: { base_url: "http://127.0.0.1:18001/v1", model: "Qwen3-30B-A3B-AWQ", api_key_env: VLLM_API_KEY }  # AutoDL 4090, ssh -L 18001
-  M2: { base_url: "http://127.0.0.1:18002/v1", model: "Qwen3-32B",         api_key_env: VLLM_API_KEY }  # AutoDL A100, ssh -L 18002
-  M3: { base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3-32b", api_key_env: DASHSCOPE_API_KEY }
+  M0: { base_url: "http://127.0.0.1:11434/v1", model: "qwen3:8b",
+        api_key_env: null,                 extra_body: { think: false } }
+  M1: { base_url: "http://127.0.0.1:18001/v1", model: "Qwen3.8-27B-NVFP4",
+        api_key_env: VLLM_API_KEY,         # AutoDL 5090, ssh -L 18001
+        extra_body: { chat_template_kwargs: { enable_thinking: false } } }
+  M2: { base_url: "http://127.0.0.1:18002/v1", model: "Qwen3.8-27B",
+        api_key_env: VLLM_API_KEY,         # AutoDL A100, ssh -L 18002
+        extra_body: { chat_template_kwargs: { enable_thinking: false } } }
+  M3: { base_url: "<AutoDL.Art 控制台『令牌管理』获取>", model: "Qwen3.5-397B-A17B",
+        api_key_env: AUTODL_ART_API_KEY,   extra_body: { }   # P1 实测确认关闭方式 }
+  M4: { base_url: "https://api.deepseek.com", model: "deepseek-v4-flash",
+        api_key_env: DEEPSEEK_API_KEY,     extra_body: { }   # P1 实测确认关闭方式 }
 ```
+
+**M4 实测能力**：上下文 **1M**、最大输出 **384K**、**Tool Calls ✓**、JSON Output ✓。
+
+#### ⚠️ thinking 模式：四档四种开关形状
+
+`Qwen3.8`、`Qwen3.5-397B-A17B` 与 `deepseek-v4-flash` **均默认开启思考模式**，思考 token 常占输出多数，会直接击穿 §14 的延迟指标。而关闭开关在各档形状不同：
+
+| 档 | 关闭方式 |
+|---|---|
+| M0 Ollama | 请求体顶层 `think: false` |
+| M1 / M2 vLLM | `extra_body.chat_template_kwargs.enable_thinking = false` |
+| M3 AutoDL.Art | 遵循 Qwen 约定，**P1 实测确认** |
+| M4 DeepSeek | 官方文档「Thinking Mode」章节所述参数，**P1 实测确认** |
+
+**thinking 开关状态必须作为评测的显式变量记录**，否则跨档位的延迟数字不可比。
 
 `LLMGateway` 统一职责：档位路由、超时与重试、token 计量、延迟埋点、失败降级、**将 model_tier 写入每条审计记录**（评测归因的前提）。
 
@@ -709,7 +769,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 
 | 瓶颈 | 量级 | 应对 |
 |---|---|---|
-| **vLLM 推理并发** | 4090 24G 跑 Qwen3-30B-A3B-AWQ 约 4–8 路；A100 80G 跑 Qwen3-32B BF16 约 20–40 路。随上下文长度显著变化 | 硬上限，本期不试图突破；压测据此标定 |
+| **vLLM 推理并发** | 按 P0 实测的混合注意力架构（KV/token 64 KiB）重算：5090 32G 跑 NVFP4 的 KV 容量 75K token、A100 80G 跑 BF16 为 272K，10 并发 × 3.5K = 35K 需求下两档均有余量。实际并发上限由计算而非 KV 决定，须 P5 压测 | 硬上限，本期不试图突破；压测据此标定 |
 | **checkpointer 写库** | 每次节点转换写一次 PostgreSQL，高并发下成为真瓶颈 | `AsyncPostgresSaver` + 连接池；只读子图关闭 checkpoint |
 | **同步阻塞调用** | 工具函数中若存在同步 HTTP / DB 调用会阻塞 event loop，并发直接塌方 | **全链路 async 强制约束**，配 lint 规则拦截 |
 
@@ -768,7 +828,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 |---|---|---|
 | 五个主线场景端到端成功率 | **≥90%** | 测试集 ≥40 条（5 场景 × 6 条 + 边界 10 条） |
 | RAG 答案引用准确率 | **≥85%** | 引用来源与答案内容一致且可溯源到原文 |
-| 单轮响应平均延迟 | M2 P50 ≤5s / M3 P50 ≤3s / M1 P50 ≤4s | 流式首 token 与完整响应分别统计 |
+| 单轮响应平均延迟 | M2 P50 ≤5s / M1 P50 ≤4s / M3·M4 P50 ≤3s | 流式首 token 与完整响应分别统计 |
 | 边界情况处理 | 全部正确 | 缺参追问、模糊意图、BU 消歧、API 失败降级 |
 | **并发承载** | **≤10 并发会话不劣化** | P5 做 10 并发压测，M1 / M2 两档分别测；未达标则作为报告结论之一 |
 | 双部署对比结论 | 出数 | 准确率、延迟、成本、数据安全性四维 |
@@ -795,7 +855,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | AutoDL 开机 → SSH 隧道 → vLLM 起（**含 `--enable-auto-tool-choice --tool-call-parser hermes`，验收须返回结构化 `tool_calls`**） | 1.5 | P1 验收信号不成立 |
 | **RAG spike**：1 份最难文档（《色差与等级判定标准》）进 Dify，问 5 题人工核对引用可溯源 | 0.5 | **引用不可溯源则 §8 检索路径需重做** |
 | 前端栈 spike：Vite 8 + React 19 + antd 6 + TS 7 脚手架 + 一个流式组件 | 0.25 | TS 7 回退 5.x |
-| R1 型号核实：Qwen3 当期开源型号 + **百炼上 M2 对应权重是否可得** | 0.2 | 核心对照组前提不成立 |
+| ~~R1 型号核实~~ | 0.2 | ✅ **已完成**：发现前八版型号用错，改用 Qwen3.8-27B；托管侧无同权重，已放弃同权重对比 |
 | 任务级 WBS（≤0.5 人天粒度，从 P5 前移）+ 外部依赖表 | 0.6 | — |
 | **小计** | **4.3** | |
 
@@ -854,7 +914,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | R1 | Qwen 型号命名基于 2026-05 前信息，可能已更新 | 选型偏差 | P1 开始前核实当期最新版本，同步调整配置 |
 | R2 | 本机 16GB 内存承载不了完整本地栈 | 开发受阻 | Dify 部署至 GPU 服务器；本机仅跑轻量栈 |
 | R3 | Docker daemon 当前未运行 | P4 受阻 | P4 开始前启动 Docker Desktop |
-| R4 | ~~阿里云百炼 API Key 尚未提供~~ | — | ✅ **已关闭**（v1.5）：Key 已就绪，由用户注入 `.env` |
+| R4 | ~~托管档 API Key 尚未提供~~ | — | ✅ **已关闭**（v2.0）：AutoDL.Art 与 DeepSeek 官方两个 Key 均由用户确认具备，按宪法第七条注入 `.env` |
 | R5 | AutoDL 无公网 IP，SSH 隧道易断 | M3 数据不稳 | 隧道保活 + 自动重连；M3 为补充数据点，非核心对照组 |
 | R6 | Dify 检索配置不进 git | 违反 git 全生命周期约束 | `dify_snapshot.py` 配置快照版本化（§8.2） |
 | R7 | 十二项 Dify 场景范围较大 | 工期超支 | 里程碑一为完整交付切点，中期可据反馈砍 P4/P5 范围 |
@@ -876,7 +936,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 
 | # | 事项 | 处置 |
 |---|---|---|
-| Q1 | 阿里云百炼 API Key | ✅ **已关闭**（2026-08-28）：已就绪，由用户按宪法第七条自行注入 `.env`，不进 git |
+| Q1 | 托管档 API Key | ✅ **已关闭**（v2.0）：`AUTODL_ART_API_KEY` 与 `DEEPSEEK_API_KEY` 均由用户确认具备，按宪法第七条自行注入 `.env`，不进 git |
 | Q2 | GPU 部署形态 | ✅ **已关闭**：全部采用 AutoDL，交付《AutoDL 部署配置参数设置指南》；SSH 凭据由用户注入 `.env` |
 | Q3 | 团队规模 | ✅ **已关闭**：1 人，全串行，日历周期 7.2 周（含缓冲约 8 周），**不砍范围** |
 | Q4 | 通知渠道选型 | ✅ **已关闭**：企微 / 钉钉 / 飞书 / 邮件四渠道全部预置，统一 `NotifierPort` 接口 |
