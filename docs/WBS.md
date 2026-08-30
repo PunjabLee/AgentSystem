@@ -31,42 +31,79 @@
 
 ---
 
-## P1 地基（6.1 人天）
+## P1 地基（7.4 人天）
 
 **出口判据**（2026-08-30 评审批准修订）：`make chat` 在 **M0 / M3 / M4 三档**均能回话且返回结构化 `tool_calls`；CI 绿；`make backup` 已演练过一次恢复。
 
 > 原判据要求 M0–M4 五档全通，但 M1/M2 是 AutoDL 自建档、依赖已转待办的 P0-7，照此判据 P1 永远出不了口。**M1/M2 的验证挂到 P0-7 完成时补做。**
 
-### P1.1 仓库与工程化（1.0）
+### P1.1 仓库与工程化（1.3）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.1.1 | 目录骨架、`pyproject.toml`（uv）、`package.json`、Makefile 目标 | 0.3 | — |
 | P1.1.2 | `.env.example` 建立（当前**缺失**），所有密钥项列全并加注释 | 0.2 | — |
 | P1.1.3 | 分支策略落地：`main` 保护、`feat/p{N}-*`、`docs/*` | 0.2 | — |
-| P1.1.4 | `make dev` / `make dev-m0` 互斥实现（Ollama 与 Dify 错峰） | 0.3 | — |
+| P1.1.5 | **Alembic 迁移框架 + 初始基线**【自查补】<br>P1 要建 `audit_log` 与 `write_intent` 两张表，而 Alembic 原排在 P2.1.8 —— 无迁移工具就只能裸 SQL 建表，P2 引入时须回填基线 | 0.2 | — |
+| P1.1.6 | **数据库连接池配置**【自查补 · DevOps 评审点名】<br>Dify 的 api/worker/beat/plugin_daemon + 我们的 asyncpg 池 + checkpointer 池 + 评测脚本共用一个 PG 实例，须显式设定各池大小并调高 `max_connections` | 0.1 | P1.1.5 |
+| P1.1.4 | **Ollama 上下文固化**（取代原「错峰互斥」方案）【P0 实测推翻原方案】<br>用 Modelfile 固化 `num_ctx`，使 chat 与 embedding 两模型可同时常驻 | 0.3 | — |
 
-### P1.2 模型抽象层 LLMGateway（1.5）
+**为什么取消错峰约束**（2026-08-30 实测）：
+
+原方案要求 `make dev` / `make dev-m0` 互斥，但它与出口判据冲突——出口判据要求 M0 能回话（M0 = Ollama），而 `qwen3-embedding:0.6b` 也在 Ollama 上、Dify 的 RAG 检索依赖它。Ollama 一停，RAG 链路就废。
+
+实测发现真正的原因**不是容器内存不足**（容器仅占 2.25 GiB / 分配 7.75 GiB），而是 **Ollama 的默认上下文导致模型常驻膨胀**：
+
+| 模型 | 默认 | Modelfile 固化后 |
+|---|---|---|
+| `qwen3:8b` | **11 GB** @ ctx 40960 | **6.6 GB** @ ctx 8192 |
+| `qwen3-embedding:0.6b` | **5.8 GB** @ ctx 32768 | **2.1 GB** @ ctx 2048 |
+| Ollama 进程合计 | 10.20 GiB | **7.08 GiB** |
+| 宿主 free | **7%**（swap 增至 5 GB） | **33%** |
+
+639 MB 权重的 embedding 模型占 5.8 GB，**全是 32K 上下文的 KV cache**。
+
+⚠️ **`num_ctx` 是每请求参数，不持久化**——用 `options.num_ctx` 传一次后，下次不传即回退默认值。必须用 Modelfile 固化：
+
+```
+FROM qwen3:8b
+PARAMETER num_ctx 8192
+```
+
+固化后两模型同时常驻、内存有余量，**错峰约束取消**。
+
+### P1.2 模型抽象层 LLMGateway（1.9）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P1.2.1 | `config/models.yaml` 四档定义（M0–M3）：`base_url` / `model` / `api_key` | 0.3 | — |
+| P1.2.1 | `config/models.yaml` **五档定义（M0–M4）**：`base_url` / `model` / `api_key` | 0.3 | — |
 | P1.2.2 | **`extra_body` 段：thinking 模式开关按档位注入**【评审】【P0 实测】<br>**四种形状且互不通用**（见下表） | 0.5 | P1.2.1 |
 
 **thinking 开关的实测形状**（P0 阶段取得）：
 
 | 档 | 关闭方式 | 状态 |
 |---|---|---|
-| M0 Ollama | 顶层 `think: false`（官方文档只演示原生 `/api/chat`，`/v1` 是否接受待验） | ⏸ 待实测 |
+| **M0 Ollama** | 原生 `/api/chat` 用顶层 `think: false`；<br>🔴 **OpenAI 兼容端点 `/v1` 静默忽略该参数**——不报错但仍思考 | ✅ **实测**：`/api/chat` 594→0 字思考；`/v1` 无效 |
 | M1/M2 vLLM | `chat_template_kwargs.enable_thinking = false` | ⏸ 阻塞于 D1 |
 | **M3 AutoDL.Art** | **顶层 `enable_thinking: false`**，或 `thinking.type=disabled` | ✅ **实测**：1193 → 37 tok |
 | **M4 DeepSeek** | **`thinking.type=disabled`** 或 `reasoning_effort=none`；<br>⚠️ **顶层 `enable_thinking` 对 DeepSeek 无效** | ✅ **实测**：110 → 47 tok |
 
 M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作量所在，不是配个开关。
+
+🔴 **M0 存在一处需要拍板的取舍**：LLMGateway 的前提是统一走 OpenAI 兼容接口，但 M0 的 thinking 开关**只在原生 `/api/chat` 端点生效**，`/v1` 端点静默忽略。三条路：
+
+| | 方案 | 代价 |
+|---|---|---|
+| a | M0 单独走原生端点 | 破坏「统一抽象层」，`LLMGateway` 需为一档开特例 |
+| b | M0 不关 thinking | 吃 token 与延迟；但 M0 本就不进对比结论，影响有限 |
+| c | Modelfile 固化 `think` 参数 | **需验证 Ollama 是否支持**——尚未实测 |
+
+**附带实测**：`max_tokens=80` 时 thinking 会吃光全部预算（`finish_reason=length`，`completion=80`，content 为空）。M0 的 `max_tokens` 下限须给到 800 以上。
 | P1.2.3 | 统一调用封装（同步/流式）、超时、重试、**降级链**（M1/M2 不可达 → 回落 M3 并在 UI 打标）【评审】 | 0.5 | P1.2.1 |
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
+| P1.2.5 | **`make chat` 命令 + 一个 stub 工具 schema**【自查补】<br>出口判据要求「三档均能回话且返回结构化 `tool_calls`」，但 `make chat` 此前无实现任务，且测 `tool_calls` 需要工具定义——而业务 API 属 P2。须在 P1 建一个最小 stub 工具（如 `query_inventory`）供验证 | 0.3 | P1.2.3 |
 
-### P1.3 审计基座（1.8）
+### P1.3 审计基座（2.0）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
@@ -74,6 +111,7 @@ M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作
 | P1.3.2 | **两段式写入**：独立连接写 attempt 行 → 业务事务提交/回滚 → 追加 outcome 行，同 `trace_id` 串联【评审】 | 0.5 | P1.3.1 |
 | P1.3.3 | 统一审计装饰器（宪法第一条的落地物） | 0.4 | P1.3.2 |
 | P1.3.4 | **数据库级防篡改**：`REVOKE UPDATE, DELETE ON audit_log` + `BEFORE UPDATE OR DELETE` 触发器【评审】 | 0.2 | P1.3.1 |
+| P1.3.6 | **`trace_id` 的生成与全链路传播**【自查补】<br>`audit_log` 有该字段、P1.3.3 的装饰器依赖它、§7.5 的 Dify 回写也要它，但此前无任务定义谁生成、如何贯穿请求（含跨进程传到 Dify） | 0.2 | P1.3.1 |
 | P1.3.5 | 角色与授权 SQL：`dify_owner` / `app_rw` / `app_ro`，含 `ALTER DEFAULT PRIVILEGES FOR ROLE`（防止漏授后建的表）【评审】 | 0.3 | — |
 
 ### P1.4 写意图状态表（0.5）
@@ -92,12 +130,12 @@ M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作
 | P1.5.3 | `make backup`：两条 `pg_dump -Fc`（`agentsystem` + `dify`）+ 打包 Dify storage 目录【评审】 | 0.25 | — |
 | P1.5.4 | **恢复演练一次**——没恢复过的备份不算备份【评审】 | 0.2 | P1.5.3 |
 
-### P1.6 文档与宪法修订（0.6，随阶段增量）
+### P1.6 文档与宪法修订（0.4，随阶段增量）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | ~~P1.6.1~~ | ~~宪法新增第十条 · 不可信输入~~ ✅ **已于 2026-08-30 完成**（此前多处引用但从未写入，属悬空引用，已补齐）<br>同时新增**第十一条 · 代码必须自带注释** | 0 | — |
-| P1.6.2 | 宪法勘误：`M0–M4`→`M0–M3`、关联版本同步、第七条凭据枚举补「业务系统账号口令」【评审】 | 0.1 | — |
+| P1.6.2 | 宪法勘误：关联版本同步、第七条凭据枚举补「业务系统账号口令」<br>⚠️ 原写「`M0–M4`→`M0–M3`」**方向反了**——档位确实是 M0–M4 五档，照原文执行会把对的改成错的 | 0.1 | — |
 | P1.6.3 | **《部署运维说明》起稿**（环境搭完即写，不留到 P5）【评审】<br>须含 P0 踩到的三个坑：① PG 18 挂载约定改为 `/var/lib/postgresql` ② 跨 Debian 版本换镜像后的 collation 修复清单**必须含 `template1`**（漏它会卡死全部 `CREATE DATABASE`）③ 容器访问宿主用 `host.docker.internal` | 0.3 | P1.1.1 |
 
 ---
@@ -222,4 +260,4 @@ M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作
 | D7 | 「审计要求」的来源主体（内控/监管/客户审厂） | 用户确认 | P1 内 | 审计字段是否充分、留存年限 | ⏸ 未确认 |
 | D8 | Docker Desktop 运行 | 用户 | 随时 | Dify、PG、评测 | ✅ 已运行 |
 
-**D1 是唯一剩余硬阻塞**：没有 AutoDL 实例，P1 的出口判据（`make chat TIER=M1` / `TIER=M2` 能回话并返回结构化 `tool_calls`）无法达成，而 P1 是所有后续阶段的地基。D2 已由用户确认具备，注入 `.env` 即可。
+**D1 影响 M1/M2 两档**：没有 AutoDL 实例，M1/M2 无法验证（P1 出口判据已于 2026-08-30 修订为 M0/M3/M4 三档，不再受此阻塞）。原文：（`make chat TIER=M1` / `TIER=M2` 能回话并返回结构化 `tool_calls`）无法达成，而 P1 是所有后续阶段的地基。D2 已由用户确认具备，注入 `.env` 即可。
