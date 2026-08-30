@@ -23,9 +23,10 @@
 | P0-2 | pgvector 0.8.6 + HNSW + 四维过滤检索 | 0.5 | ✅ 通过 |
 | P0-3 | 前端栈 spike（React 19 + antd 6 + Vite 8 + TS 7） | 0.25 | ✅ 通过 |
 | P0-4 | R1 型号核实与量化选型 | 0.2 | ✅ 完成，**发现型号错误** |
-| P0-5 | Dify 指向外部 PG + `COMPOSE_PROFILES` 字面量覆写 + 13 容器 `docker stats` 实测 | 0.5 | ⏸ 待做 |
-| P0-6 | RAG spike：最难的一份文档进 Dify，问 5 题人工核对引用可溯源 | 0.5 | ⏸ 依赖 P0-5 |
-| P0-7 | AutoDL 开机 → SSH 隧道 → vLLM 起（**须返回结构化 `tool_calls`**） | 1.5 | ⛔ 阻塞于 D1 |
+| P0-5 | Dify 外部单实例整合（方案 B）+ 容器内存实测 | 0.5 | ✅ **通过** |
+| P0-6 | RAG spike：引用可溯源 + 元数据过滤强证据 | 0.5 | ✅ **通过**，五题三层全过 |
+| P0-7 | AutoDL 开机 → SSH 隧道 → vLLM 起（**须返回结构化 `tool_calls`**） | 1.5 | ⏸ **转待办**（用户决定优先走厂商 API）；⛔ 阻塞于 D1 |
+| P0-9 | 多模态 embedding（WeMM-2B + Xinference） | 1.0 | ⏸ 低优先级待办 |
 | P0-8 | 任务级 WBS + 外部依赖表 | 0.6 | ✅ 本文档 |
 
 ---
