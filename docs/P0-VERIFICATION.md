@@ -387,3 +387,54 @@ Authentication Fails, Your api key is invalid
 `.env` 中的 `DEEPSEEK_API_KEY` 被 DeepSeek 官方 API 拒绝。M4 档暂不可用，其 thinking 关闭方式也因此未能实测。**需用户核对该 Key。**
 
 另：`.env` 中仍残留已废弃的 `DASHSCOPE_API_KEY`（百炼方案已放弃），建议清理。
+
+
+---
+
+## 10. 部署形态最终定案（2026-08-30 评审后调整）
+
+### 从「外部独立实例」回归「Dify compose 托管 + 宿主暴露」
+
+方案 B（独立 `agentsystem-pg` 容器）执行完成后，评审决定回归 compose 托管。**依据是一个改变风险评估的事实**：
+
+DevOps 评审警告的 `docker compose down -v` 杀手，**对 Dify 的默认配置并不成立**。`down -v` 只删除 compose 中声明的 named volume 与匿名卷，而 Dify 的数据库用的是 **bind mount**：
+
+```yaml
+volumes:
+  - ./volumes/db/data:/var/lib/postgresql/data      # bind mount，down -v 不会删
+```
+
+compose 顶层 `volumes:` 仅声明 `oradata` / `dify_es01_data` / 两个 sandbox 卷，**db 数据不在其中**。因此回归 compose 托管的风险显著低于当初评估。
+
+### 最终拓扑
+
+```
+docker-db_postgres-1  (pgvector/pgvector:pg18, 由 Dify compose 托管)
+  宿主暴露 127.0.0.1:5432   ← 宿主侧 FastAPI / 评测脚本 / psql
+  ├── agentsystem   业务 + 审计 + checkpointer     · vector 0.8.6
+  ├── dify          Dify 元数据 + pgvector 向量     · vector 0.8.6
+  └── dify_plugin   插件元数据
+
+Dify 13 个应用容器 + 1 个 PostgreSQL = 14 容器
+```
+
+改动直接写入 Dify 的 `docker-compose.yaml`（用户决定接受分叉风险，以 git 记录版本）：新增 `ports: ["${EXPOSE_DB_PORT:-5432}:5432"]` 并附注释说明修改原因。Dify 目录本身是 clone 自 `langgenius/dify` 的 git 仓库，改动可经 `git diff` 追溯。
+
+### 🔴 迁移中踩到的第三个 PG 18 坑：模板库的 collation
+
+回迁时全部 `CREATE DATABASE` 被拒：
+
+```
+ERROR: template database "template1" has a collation version mismatch
+DETAIL: created using collation version 2.41, but the OS provides version 2.36
+```
+
+**根因**：`CREATE DATABASE` 从 `template1` 克隆，而此前修复 collation 时只处理了 `postgres` / `dify` / `dify_plugin`，**漏了模板库**。模板库不修，整个实例无法建任何新库。
+
+处置：`ALTER DATABASE template1 REFRESH COLLATION VERSION`。`template0` 因 `datallowconn=false` 需临时放开连接，但其 `REFRESH` 会报 `invalid collation version change`——**这不影响使用**，因为 `CREATE DATABASE` 默认从 `template1` 克隆。
+
+**这是同一个 Debian 13 → Debian 12 的 glibc 问题第三次出现**（前两次：业务库、Dify 元数据库）。凡跨 Debian 版本更换 PostgreSQL 镜像，**必须把 `template1` 一并纳入 collation 修复清单**，否则故障会延迟到第一次建库时才暴露。此项须写入部署文档。
+
+### 顺带发现的安全问题
+
+Dify 目录的 `docker/.env` 曾被 `git add -f` 强制加入暂存区（状态 `AM`），而该仓库的 origin 指向公开的 `github.com/langgenius/dify`。一旦 commit 并 push，Redis 口令与 Dify 密钥即泄露。已执行 `git reset HEAD docker/.env` 移出暂存区——`docker/.gitignore` 本就以 `*.env` 覆盖它，恢复忽略状态后无泄露风险。
