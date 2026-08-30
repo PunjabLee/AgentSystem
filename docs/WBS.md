@@ -96,12 +96,12 @@
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P2.1.1 | `product` / `color` **主数据表**——自然语言名词→code 的映射，当前缺失使 S2–S5 全部受影响【评审】 | 0.4 | — |
+| P2.1.1 | `product` / `color` **主数据表**（`bu_code` 枚举 BU-A/BU-B/BU-C）——自然语言名词→code 的映射，当前缺失使 S2–S5 全部受影响【评审】 | 0.4 | — |
 | P2.1.2 | `production_line` **产能表**——没有它 `changeover_min` 是死字段，S5「会不会延误」只是两个日期比大小【评审】 | 0.4 | — |
 | P2.1.3 | `sales_order` / `sales_order_line`：加 `confirm_token UNIQUE`（幂等）、`line_no` + `UNIQUE(order_no, line_no)`、`order_no` 用 sequence【评审】 | 0.5 | P1.4.1 |
 | P2.1.4 | `inventory_batch`：加 `uom`、`delta_e` 基准语义注释、`qty_locked` 用途明确化【评审】 | 0.4 | — |
 | P2.1.5 | `production_plan`：`related_order_line` 外键、`stage_seq` 工序顺序、`actual_start/end`、`qty_completed`、`uom`【评审】 | 0.5 | P2.1.3 |
-| P2.1.6 | `spec` 保留展示字符串 + `attrs JSONB` 结构化属性 + GIN 索引（双 BU 属性真实发散）【评审】 | 0.3 | — |
+| P2.1.6 | `spec` 保留展示字符串 + `attrs JSONB` 结构化属性 + GIN 索引（三 BU 属性真实发散）【评审】 | 0.3 | — |
 | P2.1.7 | `same_batch_req BOOLEAN` → `batch_policy`（`SAME_BATCH`/`CROSS_OK_WITHIN_TOL`/`ANY`）+ 订单行 `delta_e_tolerance`【评审】 | 0.25 | P2.1.4 |
 | P2.1.8 | Alembic 迁移基线 | 0.25 | P2.1.1–7 |
 
