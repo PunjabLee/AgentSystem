@@ -90,15 +90,27 @@ PARAMETER num_ctx 8192
 
 M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作量所在，不是配个开关。
 
-🔴 **M0 存在一处需要拍板的取舍**：LLMGateway 的前提是统一走 OpenAI 兼容接口，但 M0 的 thinking 开关**只在原生 `/api/chat` 端点生效**，`/v1` 端点静默忽略。三条路：
+#### 🔴 M0 的 thinking 无法在 OpenAI 兼容端点关闭 —— 已决策：保留
 
-| | 方案 | 代价 |
-|---|---|---|
-| a | M0 单独走原生端点 | 破坏「统一抽象层」，`LLMGateway` 需为一档开特例 |
-| b | M0 不关 thinking | 吃 token 与延迟；但 M0 本就不进对比结论，影响有限 |
-| c | Modelfile 固化 `think` 参数 | **需验证 Ollama 是否支持**——尚未实测 |
+LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开关只在原生 `/api/chat` 端点生效**。四种关闭方式在 `/v1` 端点上全部实测失败：
 
-**附带实测**：`max_tokens=80` 时 thinking 会吃光全部预算（`finish_reason=length`，`completion=80`，content 为空）。M0 的 `max_tokens` 下限须给到 800 以上。
+| 方法 | 结果 |
+|---|---|
+| 请求体 `think: false` | **静默忽略**（不报错，仍思考） |
+| Modelfile `PARAMETER think false` | `Error: unknown parameter 'think'` |
+| Modelfile `SYSTEM /no_think` | 无效（252 → 205 tok，基本没变） |
+| 用户消息前/后加 `/no_think`（Qwen3 软开关的规范用法） | 无效（411 / 378 / 357 tok） |
+
+判据：该问题的正文仅 5 字，`completion < 60` 才算关闭；实测四种方式均在 **357–411** token。
+
+**决策（2026-08-30 用户拍板）：M0 保留 thinking，换取统一走 OpenAI 兼容接口。**
+
+理由与影响：
+
+- M0 是**开发 / CI 档，不进对比结论**（设计文档 §6.1 明确），thinking 的成本与延迟不污染 PoC 报告
+- CI 已定为**不含 LLM 调用**（P1.5.1，全 mock），故 CI 不受影响；M0 只用于本地手动冒烟
+- ⚠️ **`config/models.yaml` 中 M0 的 `max_tokens` 下限必须 ≥ 800**。实测 `max_tokens=80` 时 thinking 吃光全部预算：`finish_reason=length`、`completion=80`、**content 为空**
+- 实现上 M0 的 `extra_body` 段为空——**这不是漏配，是查证四种方式后确认无解**，须在代码注释中写明，避免后续维护者误以为遗漏
 | P1.2.3 | 统一调用封装（同步/流式）、超时、重试、**降级链**（M1/M2 不可达 → 回落 M3 并在 UI 打标）【评审】 | 0.5 | P1.2.1 |
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
 | P1.2.5 | **`make chat` 命令 + 一个 stub 工具 schema**【自查补】<br>出口判据要求「三档均能回话且返回结构化 `tool_calls`」，但 `make chat` 此前无实现任务，且测 `tool_calls` 需要工具定义——而业务 API 属 P2。须在 P1 建一个最小 stub 工具（如 `query_inventory`）供验证 | 0.3 | P1.2.3 |
