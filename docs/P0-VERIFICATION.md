@@ -20,7 +20,7 @@
 | 6 | psycopg3 async 退路 | ✅ 可用 | 退路仍在 |
 | 7 | 前端栈（React 19 + antd 6 + Vite 8 + TS 7） | ✅ 通过 | **TS 7 不必回退** |
 | 8 | Dify 外部单实例整合 + 内存实测 | ✅ **完成**（方案 B） | 见 §7 |
-| 9 | RAG spike（引用可溯源） | ⏸ 未执行 | 依赖 Dify |
+| 9 | RAG spike（引用可溯源） | ✅ **通过** | 五题三层全过，元数据过滤取得强证据。详见 [P0-6 结果](P0-6-RAG-SPIKE-PLAN.md#8-执行结果2026-08-30) |
 | 10 | AutoDL + vLLM（含 tool_calls） | ⏸ **转待办** | 用户决定优先走厂商 API，M1/M2 延后 |
 | 11 | 托管档 M3 | ✅ **实测通过** | Function Calling 正常，见 §8 |
 | 12 | 托管档 M4 | 🔴 **Key 被拒** | DeepSeek 官方返回 api key invalid，见 §8 |
