@@ -87,7 +87,7 @@ M1/M2 是 AutoDL 自建档，依赖 **P0-7**——而 P0-7 已按决策转为待
 | M1 | AutoDL 5090 + `unsloth/Qwen3.8-27B-NVFP4` | **阻塞于 D1** | ⏸ 移至 P0-7 |
 | M2 | AutoDL A100 + `Qwen3.8-27B` BF16 | **阻塞于 D1** | ⏸ 移至 P0-7 |
 | M3 | AutoDL.Art 托管 `Qwen3.5-397B-A17B` | ✅ **已实测通过** | ✅ 要求 |
-| M4 | DeepSeek 官方 `deepseek-v4-flash` | ⚠️ Key 待复验 | ✅ 要求 |
+| M4 | DeepSeek 官方 `deepseek-v4-flash` | ✅ **已验证** | ✅ 要求 |
 
 **修订判据：`make chat` 在 M0 / M3 / M4 三档均能回话且返回结构化 `tool_calls`；CI 绿；`make backup` 已演练过一次恢复。** M1/M2 的验证挂到 P0-7 完成时补做。
 
@@ -107,8 +107,8 @@ M1/M2 是 AutoDL 自建档，依赖 **P0-7**——而 P0-7 已按决策转为待
 | Dify 1.17.0（14 容器，含托管 PG） | ✅ 就绪 |
 | Ollama + `qwen3-embedding:0.6b` + `qwen3:8b` | ✅ 就绪 |
 | M3 AutoDL.Art API Key | ✅ 已验证 |
-| **M4 DeepSeek API Key** | ⚠️ **用户已更新，尚未复验** —— P1.2 首日验证 |
-| **D1 AutoDL 实例** | ⛔ **未申请**，见第三部分 |
+| M4 DeepSeek API Key | ✅ **已复验通过**（Function Calling 正常，thinking 关闭方式已实测） |
+| D1 AutoDL 实例 | ✅ **已开通**，当前**无卡模式**（CPU-only）—— 正是下载权重的最优窗口，见 §3.6 |
 
 ---
 
@@ -203,6 +203,39 @@ M1/M2 是 AutoDL 自建档，依赖 **P0-7**——而 P0-7 已按决策转为待
 ✅ Dify 1.17.0        14 容器，内存实测 2.25 GiB / 分配 7.75 GiB
 ✅ Ollama             qwen3:8b (M0) · qwen3-embedding:0.6b
 ✅ M3 AutoDL.Art      Function Calling 实测通过
-⚠️ M4 DeepSeek        Key 已更新待复验
-⛔ M1/M2 AutoDL       阻塞于 D1
+✅ M4 DeepSeek        Function Calling 实测通过
+🟡 M1/M2 AutoDL       D1 已开通（无卡模式），待 SSH 凭据即可开始下载权重
 ```
+
+---
+
+## 3.6 D1 已开通 · 无卡模式窗口的用法（2026-08-30 更新）
+
+D1 已按规格开通，当前为**无卡模式**（CPU-only，不计 GPU 费用）。
+
+**这正是 §3.3 所说的最优下载窗口。** 建议在切换到 GPU 模式前，先在无卡模式下完成全部权重下载：
+
+| 档 | 仓库 | 体积 |
+|---|---|---|
+| M1 | `unsloth/Qwen3.8-27B-NVFP4` | 21.8 GiB |
+| M2 | `Qwen/Qwen3.8-27B` | 51.7 GiB |
+
+合计 **73.5 GiB**。按国内网络下载耗时可能 1–3 小时——**用无卡模式做这件事，可省下等量的 GPU 计费**。走 ModelScope 而非 HuggingFace。
+
+### 需要提供的接入信息
+
+要在无卡模式窗口内启动下载，需 §3.5 的前两项：
+
+1. **SSH 地址与端口**
+2. **SSH 公钥是否已上传**（推荐）
+
+凭据请按宪法第七条自行写入 `.env`，不经对话传递：
+
+```bash
+cat >> .env <<'EOT'
+AUTODL_SSH_HOST=你的实例地址
+AUTODL_SSH_PORT=你的端口
+EOT
+```
+
+**同时需在 P0-7 验证的一个假设**：AutoDL 实例**关机再开机后，SSH 地址与端口是否变化**。当前设计默认它不变（`.env` 存一份即可）。若会变，隧道脚本必须参数化、每次开机重读。**15 分钟即可验证，假设错了会在演示当天爆炸。**

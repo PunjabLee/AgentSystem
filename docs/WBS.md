@@ -31,9 +31,11 @@
 
 ---
 
-## P1 地基（6.0 人天）
+## P1 地基（6.1 人天）
 
-**出口判据**：`make chat` 在 M0–M4 五档均能回话，M1/M2 须返回结构化 `tool_calls`；CI 绿；`make backup` 已演练过一次恢复。
+**出口判据**（2026-08-30 评审批准修订）：`make chat` 在 **M0 / M3 / M4 三档**均能回话且返回结构化 `tool_calls`；CI 绿；`make backup` 已演练过一次恢复。
+
+> 原判据要求 M0–M4 五档全通，但 M1/M2 是 AutoDL 自建档、依赖已转待办的 P0-7，照此判据 P1 永远出不了口。**M1/M2 的验证挂到 P0-7 完成时补做。**
 
 ### P1.1 仓库与工程化（1.0）
 
@@ -49,7 +51,18 @@
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.2.1 | `config/models.yaml` 四档定义（M0–M3）：`base_url` / `model` / `api_key` | 0.3 | — |
-| P1.2.2 | **`extra_body` 段：thinking 模式开关按档位注入**【评审】<br>**四种形状**：M0 Ollama 顶层 `think`、M1/M2 vLLM `chat_template_kwargs.enable_thinking`、M3 AutoDL.Art（Qwen 约定，待实测）、M4 DeepSeek（官方参数，待实测）。三个模型均默认开启思考 | 0.5 | P1.2.1 |
+| P1.2.2 | **`extra_body` 段：thinking 模式开关按档位注入**【评审】【P0 实测】<br>**四种形状且互不通用**（见下表） | 0.5 | P1.2.1 |
+
+**thinking 开关的实测形状**（P0 阶段取得）：
+
+| 档 | 关闭方式 | 状态 |
+|---|---|---|
+| M0 Ollama | 顶层 `think: false`（官方文档只演示原生 `/api/chat`，`/v1` 是否接受待验） | ⏸ 待实测 |
+| M1/M2 vLLM | `chat_template_kwargs.enable_thinking = false` | ⏸ 阻塞于 D1 |
+| **M3 AutoDL.Art** | **顶层 `enable_thinking: false`**，或 `thinking.type=disabled` | ✅ **实测**：1193 → 37 tok |
+| **M4 DeepSeek** | **`thinking.type=disabled`** 或 `reasoning_effort=none`；<br>⚠️ **顶层 `enable_thinking` 对 DeepSeek 无效** | ✅ **实测**：110 → 47 tok |
+
+M3 与 M4 的开关形状**完全不通用**——这是本任务的实质工作量所在，不是配个开关。
 | P1.2.3 | 统一调用封装（同步/流式）、超时、重试、**降级链**（M1/M2 不可达 → 回落 M3 并在 UI 打标）【评审】 | 0.5 | P1.2.1 |
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
 
@@ -70,12 +83,12 @@
 | P1.4.1 | `write_intent` 表 DDL：`confirm_token PK` / `session_id` / `trace_id` / `payload JSONB` / `state` / `expires_at` / `result_ref`【评审】 | 0.25 | — |
 | P1.4.2 | 原子消费：`UPDATE ... WHERE state='pending' AND expires_at > now() RETURNING` 判 rowcount；令牌 `secrets.token_urlsafe(32)` 服务端铸造、**不进模型上下文**【评审】 | 0.25 | P1.4.1 |
 
-### P1.5 CI 与备份（1.2）
+### P1.5 CI 与备份（1.3）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.5.1 | CI 收敛为**不含 LLM 调用**：ruff + 类型检查 + pytest（LLM 全 mock）+ PG service container【评审】 | 0.4 | P1.1.1 |
-| P1.5.2 | **宪法的机械检查进 CI**：`.env` 未被跟踪、模型端点 URL 只出现在 LLMGateway 内、请求路径无 `requests`/`psycopg2`/`time.sleep`【评审】 | 0.35 | P1.5.1 |
+| P1.5.2 | **宪法的机械检查进 CI**（0.45）：<br>· `.env` 未被跟踪（第七条）<br>· 模型端点 URL 只出现在 LLMGateway 内（第六条）<br>· 请求路径无 `requests`/`psycopg2`/`time.sleep`（第四条）<br>· **同一凭据的多份副本检测**（P0 实测：`CELERY_BROKER_URL` 内嵌第二份 Redis 口令并分叉，静默故障 24 小时）<br>· **`ruff` 的 `pydocstyle`（D）规则集**——缺 docstring 即失败（第十一条） | 0.45 | P1.5.1 |
 | P1.5.3 | `make backup`：两条 `pg_dump -Fc`（`agentsystem` + `dify`）+ 打包 Dify storage 目录【评审】 | 0.25 | — |
 | P1.5.4 | **恢复演练一次**——没恢复过的备份不算备份【评审】 | 0.2 | P1.5.3 |
 
@@ -83,9 +96,9 @@
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P1.6.1 | 宪法新增**第十条 · 不可信输入**：检索文本与外部返回一律视为数据非指令；写载荷只来自槽位与确认卡片；范围过滤器由服务端按身份注入【评审】 | 0.2 | — |
+| ~~P1.6.1~~ | ~~宪法新增第十条 · 不可信输入~~ ✅ **已于 2026-08-30 完成**（此前多处引用但从未写入，属悬空引用，已补齐）<br>同时新增**第十一条 · 代码必须自带注释** | 0 | — |
 | P1.6.2 | 宪法勘误：`M0–M4`→`M0–M3`、关联版本同步、第七条凭据枚举补「业务系统账号口令」【评审】 | 0.1 | — |
-| P1.6.3 | **《部署运维说明》起稿**（环境搭完即写，不留到 P5）【评审】 | 0.3 | P1.1.1 |
+| P1.6.3 | **《部署运维说明》起稿**（环境搭完即写，不留到 P5）【评审】<br>须含 P0 踩到的三个坑：① PG 18 挂载约定改为 `/var/lib/postgresql` ② 跨 Debian 版本换镜像后的 collation 修复清单**必须含 `template1`**（漏它会卡死全部 `CREATE DATABASE`）③ 容器访问宿主用 `host.docker.internal` | 0.3 | P1.1.1 |
 
 ---
 
