@@ -5,7 +5,7 @@
 | 版本 | v1.0 |
 | 创建日期 | 2026-08-29（P0 前置验证周产出，由 P5 前移） |
 | 粒度 | P1/P2 做到 **≤0.5 人天**；P3–P5 中粒度，各阶段开工前细化 |
-| 关联 | [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) · [P0 验证结果](P0-VERIFICATION.md) · [评审报告](REVIEW-PANEL-2026-08-28.md) · [宪法](CONSTITUTION.md) |
+| 关联 | [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) · **[P1 详细设计](design/P1-DETAILED-DESIGN.md)** · [P0 验证结果](P0-VERIFICATION.md) · [评审报告](REVIEW-PANEL-2026-08-28.md) · [宪法](CONSTITUTION.md) |
 
 > **本 WBS 不用于重估工期。** 设计文档 v1.8 的 62.8 人天维持不变，此处人天仅作任务排序与依赖判断之用。
 >
@@ -32,6 +32,10 @@
 ---
 
 ## P1 地基（8.3 人天，评审后修订）
+
+> **编码前须读 [P1 详细设计](design/P1-DETAILED-DESIGN.md)**：本清单说「做什么」，详细设计定「接口长什么样」。六处跨模块契约（LLMGateway 接口与 `models.yaml`、审计装饰器与两段式时序、`write_intent` 状态机、错误模型、CI 检查规则、Makefile 目标）在那里定稿，定错了 P2–P5 全要跟着改。
+>
+> 详细设计的 §8 给出**由依赖决定的实现顺序**，与本清单按主题分组的编号不同——实施时以 §8 为准。
 
 **出口判据**（2026-08-30 批准修订，2026-08-31 按评审意见改为可证伪形式）：
 
