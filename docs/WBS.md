@@ -144,7 +144,7 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P1.4.1 | `write_intent` 表 DDL：`confirm_token PK` / `session_id` / `trace_id` / `payload JSONB` / `state` / `expires_at` / `result_ref`【评审】 | 0.25 | — |
+| P1.4.1 | `write_intent` 建表（✅ **DDL 已在设计文档 §4.1.6 定稿**，含 CHECK 枚举与两个索引） | 0.25 | **P1.3.5** |
 | P1.4.2 | 原子消费 + **绑定会话身份**【安全评审阻塞】<br>`UPDATE ... WHERE state='pending' AND expires_at > now() AND session_id = :当前会话 RETURNING` 判 rowcount<br>🔴 **原设计 WHERE 不含 `session_id`——任何持 token 的会话都能完成确认**。令牌本身不可伪造不可重放，漏的是「谁在确认」（违反宪法一、十）。身份取自 Gateway 会话，**不取自请求体**<br>🔴 **执行只取 `write_intent.payload`，确认请求不得携带参数**——否则合法 token 配一份篡改过的 payload 即可绕过<br>消费语义显式选定：**独立提交 = 至多一次**（失败则令牌作废） | 0.3 | P1.4.1 |
 
 ### P1.5 CI 与备份（1.55）
@@ -174,8 +174,8 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P2.1.1 | `product` / `color` **主数据表**（`bu_code` 枚举 BU-A/BU-B/BU-C）——自然语言名词→code 的映射，当前缺失使 S2–S5 全部受影响【评审】 | 0.4 | — |
-| P2.1.2 | `production_line` **产能表**——没有它 `changeover_min` 是死字段，S5「会不会延误」只是两个日期比大小【评审】 | 0.4 | — |
+| P2.1.1 | `product` / `color` **主数据表**（`bu_code` 枚举 BU-A/BU-B/BU-C）<br>✅ **DDL 已在设计文档 §4.1.1 定稿**，本任务只需实现与生成数据——自然语言名词→code 的映射，当前缺失使 S2–S5 全部受影响【评审】 | 0.4 | — |
+| P2.1.2 | `production_line` **产能表**（✅ DDL 已在 §4.1.1 定稿）——没有它 `changeover_min` 是死字段，S5「会不会延误」只是两个日期比大小【评审】 | 0.4 | — |
 | P2.1.3 | `sales_order` / `sales_order_line`：加 `confirm_token UNIQUE`（幂等）、`line_no` + `UNIQUE(order_no, line_no)`、`order_no` 用 sequence【评审】 | 0.5 | P1.4.1 |
 | P2.1.4 | `inventory_batch`：加 `uom`、`delta_e` 基准语义注释、`qty_locked` 用途明确化【评审】 | 0.4 | — |
 | P2.1.5 | `production_plan`：`related_order_line` 外键、`stage_seq` 工序顺序、`actual_start/end`、`qty_completed`、`uom`【评审】 | 0.5 | P2.1.3 |

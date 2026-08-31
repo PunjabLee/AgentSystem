@@ -41,6 +41,7 @@
 | v1.8 | 2026-08-28 | 六位专家并行评审后重排（[合并报告](../../REVIEW-PANEL-2026-08-28.md)）。用户确认：AI 辅助中等、人天不设限、8 周非硬约束，故**全范围保留、诚实重估**，不砍场景。**总工作量 36.0 → 62.8 人天**，日历周期 15.7 周（含缓冲约 19–20 周）——同时修正原换算把人天当日历工作日的错误，改按每周 4 有效人天。**新增 P0 前置验证周**（4.3 人天）：把真正的二元风险前移，尤其「≥85% 引用准确率是否可达」的 RAG spike 与首次 AutoDL/vLLM 部署（后者原先一天工都未计，却是 P1 验收信号的前提）。八份交付文档改为随阶段增量撰写。砍范围清单降级为缓冲耗尽时的预案，并设 P3 中点为日历决策门 |
 | v2.0 | 2026-08-29 | **模型档位定稿 M0–M4**。修正一处遗留：v1.9 对 §6.1 的更新因脚本在写盘前抛出断言而从未落盘，§6.1 至此仍是最初的 Qwen3-30B-A3B / 百炼版本，本次一并补齐。型号按 P0 实测改为 Qwen3.8-27B（立项 brief 原本就指定该型号，前八版用错）。M1 用 `unsloth/Qwen3.8-27B-NVFP4`，M2 用 BF16。**放弃同权重对比**——实地核查 AutoDL.Art 43 个托管模型确认无 Qwen3.8-27B，改为三组各自单目的的对比：M1 vs M2 仅量化（唯一单变量对比）、M2 vs M3 自建 vs 采购、M3 vs M4 托管横向。M3 = AutoDL.Art `Qwen3.5-397B-A17B`，M4 = DeepSeek 官方 `deepseek-v4-flash`（1M 上下文 / 384K 输出 / Tool Calls ✓）。记录 KV/token 因**混合注意力架构**（48 线性 + 16 全注意力）实为 64 KiB 而非 256 KiB。录入两档托管真实单价作为 TCO 首批数据。新增 thinking 模式四档四形状问题——三个模型均默认开启，§6.2 原断言「差异可收敛为三个配置项」不成立 |
 | v2.0 | 2026-08-30 | 评审后事业部结构由 2 个增为 **3 个**：BU-A 印染 · BU-B 建陶瓷砖（集团主营，优先于卫浴）· BU-C 卫浴洁具。原「建陶卫浴事业部」拆分——瓷砖与洁具的判定维度有本质差异（瓷砖看 ΔE + 平整度 + 吸水率，洁具看**白度 W** + ΔE + 釉面针孔，且洁具有「配套件必须同注浆批」这一特有约束），合为一个 BU 会掩盖真实业务差异。产品手册相应拆为 4（岩板瓷砖）与 4b（智能洁具）。同时补充**跨 BU 消歧的六层机制**（§9.1），明确歧义应在前三层消除而非靠 Supervisor 追问兜底，其中机制① 的过滤器必须由服务端按身份注入、不接受模型或前端传入 |
+| v2.1 | 2026-08-31 | **§4 数据设计补全四张缺失的表**。此前 WBS 已把它们列为 P2 任务，但设计文档从无 DDL——属「WBS 要求建、设计文档未定义」的跨文档缺口。<br>**`product` / `color`**：三张业务表只有 code 没有名称字段，用户说「白色岩板」时无从落到 `product_code`，S2–S5 四个场景全部受影响；此前产品名只存在于 RAG 产品手册中，等于要求 LLM 先检索出 code 再查 SQL，把 RAG 误差引入了本该确定的查询路径。<br>**`production_line`**：补产能后 `changeover_min` 才从死字段变为真实计算——原设计的 `plan_start`/`plan_end` 已是绝对时间，延误判定退化成两个日期比大小，而 §3.2 声称的「需计算换色调机损耗」此前是空的。<br>**`write_intent`**：三位专家独立指出 `confirm_token` 的「一次性」此前只是文字承诺，无落库位置、无唯一约束、无 TTL。新表含 `session_id` 绑定（防持令牌的他方会话完成确认）、`state` CHECK 枚举、原子消费 SQL 与三条不可省约束。<br>**`audit_log` 扩展**：补 `phase(attempt/outcome)`——两段式要写两行却无字段区分，与 P1.3.2 自相矛盾；补变更前后值与追溯目标（宪法第一条）、TTFT 与 token 计量、`retrieval_ms`；`status` 枚举补 `cancelled`。<br>同时为三张业务表补外键约束，消除 `bu_code` 各存一份且无约束导致的脏数据（如 `BU-A` 配瓷砖 `product_code`）。原 4.1.1–4.1.4 顺延为 4.1.2–4.1.5 |
 
 ---
 
@@ -158,7 +159,65 @@ PoC 的产出用于为后续规模化落地提供选型与投入决策依据。
 
 三类业务数据，每表 ≥100 条模拟数据。
 
-#### 4.1.1 订单（sales_order / sales_order_line）
+#### 4.1.1 主数据（product / color / production_line）
+
+**为什么必须有主数据表**：三张业务表只有 `product_code` / `color_code` / `line_code`，**没有任何自然语言可用的名称字段**。用户说「查一下白色岩板的库存」，工具入参却需要 `product_code='P-B-1001'`——这个映射在原设计里不存在，S2–S5 四个场景全部受影响。产品名此前只存在于 RAG 知识库的产品手册中，要求 LLM 先检索出 code 再查 SQL，既不可靠又把 RAG 误差引入了本该确定的查询路径。
+
+```sql
+CREATE TABLE product (
+  product_code    VARCHAR(32) PRIMARY KEY,      -- P-A-1001 印染 / P-B-2001 瓷砖 / P-C-3001 洁具
+  bu_code         VARCHAR(8)  NOT NULL,         -- BU-A 印染 / BU-B 建陶瓷砖 / BU-C 卫浴洁具
+  product_name    VARCHAR(128) NOT NULL,        -- 「岩板 900×1800 素色系列」—— 自然语言检索入口
+  category        VARCHAR(32) NOT NULL,         -- 坯布/印花布 · 岩板/瓷砖 · 坐便器/面盆/浴缸
+  spec            VARCHAR(64) NOT NULL,         -- 展示用规格字符串
+  attrs           JSONB       NOT NULL DEFAULT '{}',
+    -- 结构化属性，按 BU 真实发散，硬拆成列会让两个 BU 各有一半列恒为 NULL：
+    --   BU-A {"width_cm":150,"gsm":180,"yarn_count":"40S"}
+    --   BU-B {"edge_mm":900,"thick_mm":9,"surface":"哑光"}
+    --   BU-C {"glaze":"白釉","water_use_l":4.5}
+  default_uom     VARCHAR(8)  NOT NULL,         -- 米 / 平方米 / 件 —— 与业务表 uom 对齐的权威来源
+  status          VARCHAR(16) NOT NULL DEFAULT 'active',   -- active / discontinued
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON product (bu_code, category);
+CREATE INDEX ON product USING gin (attrs);      -- 支撑「厚度 9mm 以上的岩板」这类数值过滤
+CREATE INDEX ON product USING gin (product_name gin_trgm_ops);  -- 模糊匹配，需 pg_trgm
+
+CREATE TABLE color (
+  color_code      VARCHAR(32) NOT NULL,
+  bu_code         VARCHAR(8)  NOT NULL,         -- 同一 color_code 在不同 BU 下可指不同颜色
+  color_name      VARCHAR(64) NOT NULL,         -- 「米白」「藏青」—— 自然语言检索入口
+  color_family    VARCHAR(32) NOT NULL,         -- 白色系/深色系/彩色系，与色差判定的例外规则挂钩
+  is_dark         BOOLEAN     NOT NULL DEFAULT false,
+    -- 明度 L* < 30。QC-STD-006 §2.1：深色系印染品优等品 ΔE 上限由 1.0 放宽至 1.5
+  std_sample_ref  VARCHAR(64),                  -- 标准样编号；BU-C 统一为集团标准白度色板
+  PRIMARY KEY (bu_code, color_code)
+);
+
+CREATE TABLE production_line (
+  line_code       VARCHAR(32) PRIMARY KEY,      -- 染缸 D-01 / 窑炉 K-03 / 成型线 F-02
+  bu_code         VARCHAR(8)  NOT NULL,
+  line_name       VARCHAR(64) NOT NULL,
+  line_type       VARCHAR(32) NOT NULL,         -- 染缸/定型机 · 压机/窑炉/抛光线 · 注浆线/隧道窑
+  capacity_per_hour NUMERIC(12,3) NOT NULL,     -- 产能
+  capacity_uom    VARCHAR(8)  NOT NULL,         -- 米/小时 · 平方米/小时 · 件/小时
+  status          VARCHAR(16) NOT NULL DEFAULT 'running'   -- running / maintenance / idle
+);
+CREATE INDEX ON production_line (bu_code, line_type);
+```
+
+**`production_line` 让 `changeover_min` 从死字段变成真实计算**。原设计中 `production_plan` 的 `plan_start` / `plan_end` 已是绝对时间，延误判定退化为两个日期比大小，而 §3.2 却声称「排产需计算换色/换规格的清洗调机损耗」——该论证此前是空的。有了产能后，S5 的插单推演才成立：
+
+```
+ETA = 该线队尾 plan_end
+    + (队尾 color_code ≠ 新单 color_code ? changeover_min : 0)
+    + qty / capacity_per_hour
+延误 = ETA > required_date
+```
+
+**外键约束**：`sales_order_line` / `inventory_batch` / `production_plan` 的 `product_code` 引用 `product`、`(bu_code, color_code)` 引用 `color`、`line_code` 引用 `production_line`。这同时消除了一类脏数据——原设计中 `bu_code` 在三张业务表里各存一份且无约束，一行数据完全可能是 `bu_code='BU-A'` 配一个瓷砖的 `product_code`。
+
+#### 4.1.2 订单（sales_order / sales_order_line）
 
 ```sql
 CREATE TABLE sales_order (
@@ -192,7 +251,7 @@ CREATE TABLE sales_order_line (
 );
 ```
 
-#### 4.1.2 库存（inventory_batch）
+#### 4.1.3 库存（inventory_batch）
 
 ```sql
 CREATE TABLE inventory_batch (
@@ -213,7 +272,7 @@ CREATE TABLE inventory_batch (
 );
 ```
 
-#### 4.1.3 排产（production_plan）
+#### 4.1.4 排产（production_plan）
 
 ```sql
 CREATE TABLE production_plan (
@@ -232,7 +291,7 @@ CREATE TABLE production_plan (
 );
 ```
 
-#### 4.1.4 审计表（audit_log）
+#### 4.1.5 审计表（audit_log）
 
 ```sql
 CREATE TABLE audit_log (
@@ -240,6 +299,7 @@ CREATE TABLE audit_log (
   trace_id        VARCHAR(64) NOT NULL,
   session_id      VARCHAR(64) NOT NULL,
   user_id         VARCHAR(32) NOT NULL,
+  phase           VARCHAR(8)  NOT NULL,         -- attempt / outcome —— 两段式写入的行区分
   action_type     VARCHAR(8)  NOT NULL,         -- read / write
   source          VARCHAR(16) NOT NULL,         -- langgraph / dify / rpa
   tool_name       VARCHAR(64),
@@ -247,12 +307,64 @@ CREATE TABLE audit_log (
   request_payload JSONB,                        -- 已脱敏
   response_payload JSONB,
   latency_ms      INTEGER,
-  status          VARCHAR(16),                  -- success / failed / degraded
+  status          VARCHAR(16),                  -- success / failed / degraded / cancelled
   confirm_token   VARCHAR(64),                  -- 写操作的二次确认令牌
-  confirmed_at    TIMESTAMPTZ,
+  target_table    VARCHAR(32),                  -- 变更目标，支撑「把 SO-xxx 的审计调出来」
+  target_id       VARCHAR(64),
+  before_value    JSONB,                        -- 宪法第一条要求的变更前后值；仅 outcome 行承载
+  after_value     JSONB,                        -- attempt 行写在业务事务外，前值不可信
+  ttft_ms         INTEGER,                      -- 首 token 延迟
+  prompt_tokens   INTEGER,
+  completion_tokens INTEGER,
+  retrieval_ms    INTEGER,                      -- 检索耗时，与 LLM 耗时分离以便归因
   created_at      TIMESTAMPTZ DEFAULT now()
 );
 ```
+
+
+#### 4.1.6 写意图状态表（write_intent）
+
+**为什么单独成表**：三位专家从不同角度独立指出 `confirm_token` 设计不完整——「一次性」此前只是文字承诺，没有落库位置、没有唯一约束、没有 TTL，且用「先查后写」消费在并发下必然有窗口。
+
+```sql
+CREATE TABLE write_intent (
+  confirm_token   VARCHAR(64) PRIMARY KEY,      -- 服务端 secrets.token_urlsafe(32) 铸造
+  session_id      VARCHAR(64) NOT NULL,         -- 消费时必须比对，防「持 token 的他方会话完成确认」
+  user_id         VARCHAR(32) NOT NULL,
+  trace_id        VARCHAR(64) NOT NULL,
+  intent_type     VARCHAR(32) NOT NULL,         -- create_order / update_order_status / ...
+  payload         JSONB       NOT NULL,         -- 用户确认过的完整载荷；执行时只取此处
+  state           VARCHAR(16) NOT NULL DEFAULT 'pending'
+                  CHECK (state IN ('pending','confirmed','cancelled','expired')),
+  expires_at      TIMESTAMPTZ NOT NULL,         -- LangGraph interrupt 无内建超时，须自行实现
+  result_ref      VARCHAR(64),                  -- 执行结果的业务主键，支撑重复提交返回原结果
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  consumed_at     TIMESTAMPTZ
+);
+CREATE INDEX ON write_intent (session_id, state);
+CREATE INDEX ON write_intent (expires_at) WHERE state = 'pending';
+```
+
+**原子消费**（在 READ COMMITTED 下无双花：第二个 UPDATE 阻塞于行锁，第一个提交后重算谓词，`state` 已变则返回 0 行）：
+
+```sql
+UPDATE write_intent
+   SET state = 'confirmed', consumed_at = now()
+ WHERE confirm_token = $1
+   AND session_id    = $2        -- 身份取自 Gateway 会话，不取自请求体
+   AND state         = 'pending'
+   AND expires_at    > now()
+RETURNING payload;
+```
+
+**三条不可省的约束**：
+
+1. **令牌绝不进入模型上下文**。若由模型在生成确认卡片时一并输出，注入指令可诱导它在后续轮次把令牌作为工具参数发出——人类根本没有被询问过。经 SSE 独立事件通道或 REST 交付前端。
+2. **执行只取库中 `payload`，确认请求不得携带参数**。否则合法令牌配一份篡改过的载荷即可绕过——重放防住了，参数篡改没防。
+3. **消费语义为「至多一次」**：审计独立提交，执行失败则令牌作废，不重试。
+
+> 若业务事务用 REPEATABLE READ，上述 UPDATE 会抛序列化错误而非返回 0 行，须捕获或锁定为 READ COMMITTED。
+
 
 ### 4.2 RAG 知识库文档（8 份）
 
