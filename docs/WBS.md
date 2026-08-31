@@ -31,21 +31,35 @@
 
 ---
 
-## P1 地基（7.4 人天）
+## P1 地基（8.3 人天，评审后修订）
 
-**出口判据**（2026-08-30 评审批准修订）：`make chat` 在 **M0 / M3 / M4 三档**均能回话且返回结构化 `tool_calls`；CI 绿；`make backup` 已演练过一次恢复。
+**出口判据**（2026-08-30 批准修订，2026-08-31 按评审意见改为可证伪形式）：
+
+三条判据此前有两条不可证伪（「能回话」无阈值、「演练过恢复」无留痕）。现钉死为机械可判：
+
+| # | 判据 | 判定方式 |
+|---|---|---|
+| 1 | **三档 tool_calls** | 固定提示词下，M0/M3/M4 均满足：`finish_reason == "tool_calls"` ∧ `tool_calls[0].function.name` 命中 stub ∧ `arguments` 可 JSON 解析 |
+| 2 | **CI 绿** | 且必须包含 P1.3.2 回滚路径与 P1.4.2 原子消费的单测——空测试集也会绿 |
+| 3 | **恢复演练** | 恢复到**干净实例**后，`audit_log` 与 `write_intent` 行数与源库一致 |
+
+三条并入 `make p1-exit`，输出 PASS/FAIL。单人项目无第三方裁判，机械判据是唯一防线。
+
+> **已实测（2026-08-31）**：M0 `finish_reason=tool_calls`（max_tokens 200/500/1200 均通过，thinking 开启不影响）· M3 completion=40 · M4 completion=78。判据 1 的可达性已验证。
 
 > 原判据要求 M0–M4 五档全通，但 M1/M2 是 AutoDL 自建档、依赖已转待办的 P0-7，照此判据 P1 永远出不了口。**M1/M2 的验证挂到 P0-7 完成时补做。**
 
-### P1.1 仓库与工程化（1.3）
+> **2026-08-31 三专家评审结论**：8.3 人天为按评审修订后的任务合计。交付评审独立重估为 **10.1 人天**（主要在 P1.2 流式+重试+降级链 0.5→1.2、P1.5.2 自研 linter 0.45→0.8），该差额**未纳入**，作为风险敞口记录于此——若 P1 实际超出 8.3，优先从 P5（17.7 人天，弹性最大）吸收。
+
+### P1.1 仓库与工程化（1.4）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.1.1 | 目录骨架、`pyproject.toml`（uv）、`package.json`、Makefile 目标 | 0.3 | — |
 | P1.1.2 | `.env.example` 建立（当前**缺失**），所有密钥项列全并加注释 | 0.2 | — |
 | P1.1.3 | 分支策略落地：`main` 保护、`feat/p{N}-*`、`docs/*` | 0.2 | — |
-| P1.1.5 | **Alembic 迁移框架 + 初始基线**【自查补】<br>P1 要建 `audit_log` 与 `write_intent` 两张表，而 Alembic 原排在 P2.1.8 —— 无迁移工具就只能裸 SQL 建表，P2 引入时须回填基线 | 0.2 | — |
-| P1.1.6 | **数据库连接池配置**【自查补 · DevOps 评审点名】<br>Dify 的 api/worker/beat/plugin_daemon + 我们的 asyncpg 池 + checkpointer 池 + 评测脚本共用一个 PG 实例，须显式设定各池大小并调高 `max_connections` | 0.1 | P1.1.5 |
+| P1.1.5 | **Alembic 迁移框架 + 初始基线**【自查补】<br>P1 要建 `audit_log` 与 `write_intent` 两张表，而 Alembic 原排在 P2.1.8 —— 无迁移工具就只能裸 SQL 建表，P2 引入时须回填基线<br>🔴 **`env.py` 必须配 `include_object` 过滤 `checkpoints*` 表**——`AsyncPostgresSaver.setup()` 自建的表不在 ORM 模型里，`--autogenerate` 会为它们生成 `drop_table`（数据评审）<br>用 **`app_migrator`** 跑迁移，不得用 `app_rw` | 0.3 | **P1.3.5** |
+| P1.1.6 | **`max_connections` 调整 + 审计独立小池**<br>⚖️ **两位评审结论相反，裁决取交付方**：交付评审指出 asyncpg 业务池、checkpointer 池、评测脚本在 P1 **都不存在**，P1 能真做的只有 `max_connections` 与审计小池；数据评审给的池位核算（峰值约 55，建议 `max_connections=120`、`work_mem=8MB`）**留作 P3 依据**<br>⚠️ **项目有两个 PG 驱动**：业务用 asyncpg，`langgraph-checkpoint-postgres` 3.1.2 实际依赖 **psycopg>=3.2 + psycopg-pool**（已查 PyPI 确认）。宪法第四条的机械检查禁的是 **`psycopg2`（同步旧版）**，**不得误伤 psycopg3** | 0.1 | P1.1.1 |
 | P1.1.4 | **Ollama 上下文固化**（取代原「错峰互斥」方案）【P0 实测推翻原方案】<br>用 Modelfile 固化 `num_ctx`，使 chat 与 embedding 两模型可同时常驻 | 0.3 | — |
 
 **为什么取消错峰约束**（2026-08-30 实测）：
@@ -76,7 +90,7 @@ PARAMETER num_ctx 8192
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P1.2.1 | `config/models.yaml` **五档定义（M0–M4）**：`base_url` / `model` / `api_key` | 0.3 | — |
+| P1.2.1 | `config/models.yaml` **五档定义（M0–M4）**：`base_url` / `model` / `api_key`<br>🔴 **`api_key` 一律写 `${ENV_VAR}` 占位，不得出现明文**【安全评审阻塞】——该文件被 git 跟踪，宪法第七条的 `.env` 检查拦不住写进被跟踪文件的密钥 | 0.3 | — |
 | P1.2.2 | **`extra_body` 段：thinking 模式开关按档位注入**【评审】【P0 实测】<br>**四种形状且互不通用**（见下表） | 0.5 | P1.2.1 |
 
 **thinking 开关的实测形状**（P0 阶段取得）：
@@ -115,32 +129,32 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
 | P1.2.5 | **`make chat` 命令 + 一个 stub 工具 schema**【自查补】<br>出口判据要求「三档均能回话且返回结构化 `tool_calls`」，但 `make chat` 此前无实现任务，且测 `tool_calls` 需要工具定义——而业务 API 属 P2。须在 P1 建一个最小 stub 工具（如 `query_inventory`）供验证 | 0.3 | P1.2.3 |
 
-### P1.3 审计基座（2.0）
+### P1.3 审计基座（2.7）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
-| P1.3.1 | `audit_log` DDL：含 `target_table` / `target_id` / `before_value JSONB` / `after_value JSONB` / `ttft_ms` / `prompt_tokens` / `completion_tokens` / `retrieval_ms` / `trace_id` / `model_tier`【评审】 | 0.4 | — |
-| P1.3.2 | **两段式写入**：独立连接写 attempt 行 → 业务事务提交/回滚 → 追加 outcome 行，同 `trace_id` 串联【评审】 | 0.5 | P1.3.1 |
+| P1.3.1 | `audit_log` DDL 扩展【评审】<br>在设计文档 §4 现有字段（`trace_id`/`session_id`/`user_id`/`action_type`/`source`/`tool_name`/`model_tier`/`status`/`confirm_token`/`created_at` 等）基础上新增：<br>· `target_table` / `target_id` / `before_value JSONB` / `after_value JSONB`（宪法第一条的「变更前后值」）<br>· `ttft_ms` / `prompt_tokens` / `completion_tokens` / `retrieval_ms`（评测归因）<br>· 🔴 **`phase VARCHAR(8)`（`attempt` / `outcome`）**——P1.3.2 要写两行，此前**无字段可区分**，两任务自相矛盾<br>· `status` 枚举补 `cancelled`；去掉 `confirmed_at`（与「仅追加」冲突，改为 outcome 行承载） | 0.45 | **P1.3.5** |
+| P1.3.2 | **两段式写入**：独立连接写 attempt 行 → 业务事务提交/回滚 → 追加 outcome 行，同 `trace_id` 串联【评审】<br>🔴 **审计须走独立小池（max=3），不得与业务共池**——业务事务已持一条连接，再从同一池 acquire 第二条，池大小 N 时 N 个并发全卡在 acquire（数据评审）<br>🔴 **`before_value` / `after_value` 只落 outcome 行**：前值必须在业务事务内、对目标行加锁后读；attempt 行写在事务之外，读到的前值不可信，只记「打算做什么」<br>含回滚路径单测 | 0.8 | P1.3.1 |
 | P1.3.3 | 统一审计装饰器（宪法第一条的落地物） | 0.4 | P1.3.2 |
-| P1.3.4 | **数据库级防篡改**：`REVOKE UPDATE, DELETE ON audit_log` + `BEFORE UPDATE OR DELETE` 触发器【评审】 | 0.2 | P1.3.1 |
+| P1.3.4 | **数据库级防篡改**【2 人收敛补强】<br>`REVOKE UPDATE, DELETE ON audit_log FROM app_rw` + `BEFORE UPDATE OR DELETE` 触发器<br>🔴 **加 `BEFORE TRUNCATE` 语句级触发器**——`TRUNCATE` 既不触发 UPDATE/DELETE 触发器，也不受 `REVOKE UPDATE,DELETE` 约束，是两位专家共同指出的绕过口<br>CI 断言：`app_rw` 对 `audit_log` 无 UPDATE/DELETE/TRUNCATE | 0.25 | **P1.3.5** |
 | P1.3.6 | **`trace_id` 的生成与全链路传播**【自查补】<br>`audit_log` 有该字段、P1.3.3 的装饰器依赖它、§7.5 的 Dify 回写也要它，但此前无任务定义谁生成、如何贯穿请求（含跨进程传到 Dify） | 0.2 | P1.3.1 |
-| P1.3.5 | 角色与授权 SQL：`dify_owner` / `app_rw` / `app_ro`，含 `ALTER DEFAULT PRIVILEGES FOR ROLE`（防止漏授后建的表）【评审】 | 0.3 | — |
+| **P1.3.5** | **角色与授权 SQL —— 必须排在所有建表任务之前**【2 人收敛】<br>**四个角色**（原为三个）：`app_migrator`（agentsystem 库属主，Alembic 专用，有 CREATE）· `app_rw`（运行时，`audit_log` 仅 INSERT+SELECT）· `app_ro`（对 `dify` 库只读）· `dify_owner`（对 `agentsystem` 无 CONNECT 且非 superuser）<br>🔴 **若 Alembic 用 `app_rw` 跑迁移，它即成为 `audit_log` 的属主——属主恒有全部权限且可 `DISABLE TRIGGER`，P1.3.4 的防篡改整层形同虚设**<br>`ALTER DEFAULT PRIVILEGES FOR ROLE` 只对此后由该角色建的对象生效，故必须前置 | 0.4 | P1.1.1 |
 
-### P1.4 写意图状态表（0.5）
+### P1.4 写意图状态表（0.55）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.4.1 | `write_intent` 表 DDL：`confirm_token PK` / `session_id` / `trace_id` / `payload JSONB` / `state` / `expires_at` / `result_ref`【评审】 | 0.25 | — |
-| P1.4.2 | 原子消费：`UPDATE ... WHERE state='pending' AND expires_at > now() RETURNING` 判 rowcount；令牌 `secrets.token_urlsafe(32)` 服务端铸造、**不进模型上下文**【评审】 | 0.25 | P1.4.1 |
+| P1.4.2 | 原子消费 + **绑定会话身份**【安全评审阻塞】<br>`UPDATE ... WHERE state='pending' AND expires_at > now() AND session_id = :当前会话 RETURNING` 判 rowcount<br>🔴 **原设计 WHERE 不含 `session_id`——任何持 token 的会话都能完成确认**。令牌本身不可伪造不可重放，漏的是「谁在确认」（违反宪法一、十）。身份取自 Gateway 会话，**不取自请求体**<br>🔴 **执行只取 `write_intent.payload`，确认请求不得携带参数**——否则合法 token 配一份篡改过的 payload 即可绕过<br>消费语义显式选定：**独立提交 = 至多一次**（失败则令牌作废） | 0.3 | P1.4.1 |
 
-### P1.5 CI 与备份（1.3）
+### P1.5 CI 与备份（1.65）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.5.1 | CI 收敛为**不含 LLM 调用**：ruff + 类型检查 + pytest（LLM 全 mock）+ PG service container【评审】 | 0.4 | P1.1.1 |
 | P1.5.2 | **宪法的机械检查进 CI**（0.45）：<br>· `.env` 未被跟踪（第七条）<br>· 模型端点 URL 只出现在 LLMGateway 内（第六条）<br>· 请求路径无 `requests`/`psycopg2`/`time.sleep`（第四条）<br>· **同一凭据的多份副本检测**（P0 实测：`CELERY_BROKER_URL` 内嵌第二份 Redis 口令并分叉，静默故障 24 小时）<br>· **`ruff` 的 `pydocstyle`（D）规则集**——缺 docstring 即失败（第十一条） | 0.45 | P1.5.1 |
-| P1.5.3 | `make backup`：两条 `pg_dump -Fc`（`agentsystem` + `dify`）+ 打包 Dify storage 目录【评审】 | 0.25 | — |
-| P1.5.4 | **恢复演练一次**——没恢复过的备份不算备份【评审】 | 0.2 | P1.5.3 |
+| P1.5.3 | `make backup`：两条 `pg_dump -Fc`（`agentsystem` + `dify`）+ **`pg_dumpall --roles-only`** + 打包 Dify storage 目录<br>🔴 `pg_dump -Fc` 带表级 GRANT 与触发器但**不带角色**（集群级）——恢复到干净实例时 GRANT 指向不存在的角色即失败（数据评审）<br>`.gitignore` 加 `backups/`、`*.dump`（dump 含 Dify 加密存储的模型凭据） | 0.3 | — |
+| P1.5.4 | **恢复演练一次**——没恢复过的备份不算备份<br>🔴 **必须恢复到干净实例**（否则抓不到角色缺失问题），判据：**两表行数与源库一致**<br>排在 P1.2.5 之后——恢复空 schema 证明力近零 | 0.4 | P1.5.3, P1.2.5 |
 
 ### P1.6 文档与宪法修订（0.4，随阶段增量）
 
