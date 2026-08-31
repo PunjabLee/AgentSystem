@@ -129,7 +129,7 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
 | P1.2.5 | **`make chat` 命令 + 一个 stub 工具 schema**【自查补】<br>出口判据要求「三档均能回话且返回结构化 `tool_calls`」，但 `make chat` 此前无实现任务，且测 `tool_calls` 需要工具定义——而业务 API 属 P2。须在 P1 建一个最小 stub 工具（如 `query_inventory`）供验证 | 0.3 | P1.2.3 |
 
-### P1.3 审计基座（2.7）
+### P1.3 审计基座（2.5）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
@@ -147,7 +147,7 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 | P1.4.1 | `write_intent` 表 DDL：`confirm_token PK` / `session_id` / `trace_id` / `payload JSONB` / `state` / `expires_at` / `result_ref`【评审】 | 0.25 | — |
 | P1.4.2 | 原子消费 + **绑定会话身份**【安全评审阻塞】<br>`UPDATE ... WHERE state='pending' AND expires_at > now() AND session_id = :当前会话 RETURNING` 判 rowcount<br>🔴 **原设计 WHERE 不含 `session_id`——任何持 token 的会话都能完成确认**。令牌本身不可伪造不可重放，漏的是「谁在确认」（违反宪法一、十）。身份取自 Gateway 会话，**不取自请求体**<br>🔴 **执行只取 `write_intent.payload`，确认请求不得携带参数**——否则合法 token 配一份篡改过的 payload 即可绕过<br>消费语义显式选定：**独立提交 = 至多一次**（失败则令牌作废） | 0.3 | P1.4.1 |
 
-### P1.5 CI 与备份（1.65）
+### P1.5 CI 与备份（1.55）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
