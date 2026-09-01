@@ -5,7 +5,7 @@
 | 版本 | v1.0 |
 | 创建日期 | 2026-08-29（P0 前置验证周产出，由 P5 前移） |
 | 粒度 | P1/P2 做到 **≤0.5 人天**；P3–P5 中粒度，各阶段开工前细化 |
-| 关联 | [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) · **[P1 详细设计](design/P1-DETAILED-DESIGN.md)** · [P0 验证结果](P0-VERIFICATION.md) · [评审报告](REVIEW-PANEL-2026-08-28.md) · [宪法](CONSTITUTION.md) |
+| 关联 | [设计文档](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) · **[P1 详细设计](design/P1-DETAILED-DESIGN.md)** · **[P2 详细设计](design/P2-DETAILED-DESIGN.md)** · [P0 验证结果](P0-VERIFICATION.md) · [评审报告](REVIEW-PANEL-2026-08-28.md) · [宪法](CONSTITUTION.md) |
 
 > **本 WBS 不用于重估工期。** 设计文档 v1.8 的 62.8 人天维持不变，此处人天仅作任务排序与依赖判断之用。
 >
@@ -171,6 +171,8 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 ---
 
 ## P2 业务数据 + API（9.0 人天）
+
+> **编码前须读 [P2 详细设计](design/P2-DETAILED-DESIGN.md)**。P2 的下游密度比 P1 更高——它产出的工具 schema 同时被 P3 的 Agent、P4 的 Dify 工具导入、P5 的评测三方消费。其中 §2「工具 schema 设计规则」是全项目对 function calling 准确率杠杆最大的一节，且**宪法第十条在此处最容易被违反**（顺手给模型加个 `bu_code` 参数即越权）。
 
 **出口判据**：Swagger 可点通；五类查询返回有业务质感的数据；fixture 断言全绿；评分细则已 commit 冻结。
 
