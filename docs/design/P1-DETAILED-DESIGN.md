@@ -16,6 +16,7 @@
 | 设计 | 理由 |
 |---|---|
 | §2 `LLMGateway` 接口与 `models.yaml` | P2/P3/P4/P5 全部调用，改签名动全身 |
+| **§2.5 身份与会话契约** | **三条红线全悬于此**：宪法一的操作者、宪法十的范围上界、`write_intent` 的会话绑定 |
 | §3 审计装饰器与两段式时序 | 所有写操作挂它；评审指出的连接池自死锁与前值时机必须先定 |
 | §4 `write_intent` 状态机 | 确认流程横跨 Gateway / LangGraph / 前端三方 |
 | §5 错误模型 | RPA 降级判定（P4）靠它区分「业务拒绝」与「系统故障」 |
@@ -173,6 +174,70 @@ class LLMResult:
 **触发条件**：连接失败 / 5xx / 超时。**不触发**：4xx（配置或请求错误，回落无意义）、`finish_reason="length"`（模型正常工作）。
 
 降级须写入 `audit_log.model_tier`（记实际档）与响应元数据。**P1 无 UI，故只落元数据与审计**，UI 打标在 P3。
+
+---
+
+## 2.5 身份与会话契约
+
+**三条红线全悬在这一节上**，而它此前全项目无定义——宪法第一条的「操作者」、第十条的过滤器上界、`write_intent` 的会话绑定，三者都从「会话」取值，却没有一份文档说会话怎么建立。若最终落成「前端传一个 `X-User-Id` 头」，越权用例失去可测对象、审计失去举证力、令牌绑定形同虚设。
+
+### 2.5.1 PoC 阶段的认证方式
+
+**静态 Bearer Token 映射到用户**，不做登录流程、不签发 JWT。PoC 只需要「身份是服务端权威的」这一性质，不需要完整的认证体系。
+
+```yaml
+# config/users.yaml —— 与 P2 §5.2 的权限配置同一份文件
+users:
+  - user_id: u_yr_01
+    name: 印染销售
+    token_sha256: "..."          # 存哈希，不存明文
+    bu_codes: [BU-A]
+    regions: [华东, 华南]
+```
+
+Token 由 `.env` 注入（宪法第七条），配置里只存 SHA-256。
+
+### 2.5.2 RequestContext
+
+```python
+@dataclass(frozen=True)
+class RequestContext:
+    """请求级身份上下文。由 Gateway 中间件构造，全链路只读。
+
+    frozen=True 是刻意的——任何下游代码都不得修改身份或权限范围。
+    """
+    user_id: str
+    session_id: str          # 服务端生成，不接受客户端指定
+    trace_id: str            # 同上，见 §2.5.3
+    bu_codes: frozenset[str] # 权限上界，宪法第十条的 allowed 集合
+    regions: frozenset[str]  # 同上；{"*"} 表示不限
+```
+
+**存放方式**：`contextvars.ContextVar[RequestContext]`，由中间件在请求入口 set。
+
+**为什么用 contextvar 而不是函数参数**：db 层要在每次查询时强制注入范围过滤（P2 §5.1），若靠参数传递，每个端点、每个查询函数都要记得传，**漏一个就是越权**；contextvar 让 db 层能自己取，忘不掉。代价是隐式依赖，用 `frozen=True` 与「只在中间件 set」两条约束抵消。
+
+### 2.5.3 session_id 与 trace_id 的生成
+
+| | 生成方 | 是否接受客户端传入 | 理由 |
+|---|---|---|---|
+| `session_id` | 服务端 | ❌ | 客户端可指定即可冒充他人会话完成 `write_intent` 确认 |
+| `trace_id` | 服务端（UUIDv7） | ❌ | 客户端可指定即可让两次操作共用一个 id，污染 attempt/outcome 串联 |
+
+若入站带了 `X-Trace-Id`，**降级存入 `audit_log.client_trace_id` 作参考，不作为权威**。
+
+UUIDv7 而非 v4：它自带时间前缀，审计表按 `trace_id` 排序即近似时序，省一个索引。
+
+### 2.5.4 与三条红线的对接
+
+| 红线 | 取值 |
+|---|---|
+| 宪法一 · 操作者 | `audit_log.user_id = ctx.user_id` |
+| 宪法十 · 范围上界 | `effective = requested ∩ ctx.bu_codes` |
+| `write_intent` 消费 | `WHERE session_id = ctx.session_id` |
+
+**三处都从同一个 `ctx` 取，不允许任何一处另起炉灶。** CI 加一条检查：`audit_log` 的写入路径、`write_intent` 的消费路径、db 层的范围注入，三处的身份来源必须是 `ctx`，不得出现从请求体取 `user_id` 的代码。
+
 
 ---
 

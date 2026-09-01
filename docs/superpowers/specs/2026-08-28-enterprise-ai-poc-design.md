@@ -4,13 +4,13 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v2.1（数据设计补全） |
+| 文档版本 | v2.2（独立评审修订） |
 | 创建日期 | 2026-08-28 |
 | 状态 | 待评审 |
 | 业务域 | 印染 + 建陶瓷砖 + 卫浴洁具 **三事业部**制造集团（建陶瓷砖为主营） |
-| 总工作量 | 65.35 人天（v2.1） |
+| 总工作量 | 65.70 人天（v2.2） |
 | 团队规模 | 1 人（全串行） |
-| 日历周期 | 16.3 周，含缓冲约 20 周 |
+| 日历周期 | 16.4 周，含缓冲约 21 周 |
 | 关联文档 | [专家团评审合并报告](../../REVIEW-PANEL-2026-08-28.md) · [项目宪法](../../CONSTITUTION.md) · [技术栈版本矩阵](../../TECH-STACK-VERSIONS.md) |
 
 ### 编号约定
@@ -42,6 +42,7 @@
 | v2.0 | 2026-08-29 | **模型档位定稿 M0–M4**。修正一处遗留：v1.9 对 §6.1 的更新因脚本在写盘前抛出断言而从未落盘，§6.1 至此仍是最初的 Qwen3-30B-A3B / 百炼版本，本次一并补齐。型号按 P0 实测改为 Qwen3.8-27B（立项 brief 原本就指定该型号，前八版用错）。M1 用 `unsloth/Qwen3.8-27B-NVFP4`，M2 用 BF16。**放弃同权重对比**——实地核查 AutoDL.Art 43 个托管模型确认无 Qwen3.8-27B，改为三组各自单目的的对比：M1 vs M2 仅量化（唯一单变量对比）、M2 vs M3 自建 vs 采购、M3 vs M4 托管横向。M3 = AutoDL.Art `Qwen3.5-397B-A17B`，M4 = DeepSeek 官方 `deepseek-v4-flash`（1M 上下文 / 384K 输出 / Tool Calls ✓）。记录 KV/token 因**混合注意力架构**（48 线性 + 16 全注意力）实为 64 KiB 而非 256 KiB。录入两档托管真实单价作为 TCO 首批数据。新增 thinking 模式四档四形状问题——三个模型均默认开启，§6.2 原断言「差异可收敛为三个配置项」不成立 |
 | v2.0 | 2026-08-30 | 评审后事业部结构由 2 个增为 **3 个**：BU-A 印染 · BU-B 建陶瓷砖（集团主营，优先于卫浴）· BU-C 卫浴洁具。原「建陶卫浴事业部」拆分——瓷砖与洁具的判定维度有本质差异（瓷砖看 ΔE + 平整度 + 吸水率，洁具看**白度 W** + ΔE + 釉面针孔，且洁具有「配套件必须同注浆批」这一特有约束），合为一个 BU 会掩盖真实业务差异。产品手册相应拆为 4（岩板瓷砖）与 4b（智能洁具）。同时补充**跨 BU 消歧的六层机制**（§9.1），明确歧义应在前三层消除而非靠 Supervisor 追问兜底，其中机制① 的过滤器必须由服务端按身份注入、不接受模型或前端传入 |
 | v2.1 | 2026-08-31 | **§4 数据设计补全四张缺失的表**。此前 WBS 已把它们列为 P2 任务，但设计文档从无 DDL——属「WBS 要求建、设计文档未定义」的跨文档缺口。<br>**`product` / `color`**：三张业务表只有 code 没有名称字段，用户说「白色岩板」时无从落到 `product_code`，S2–S5 四个场景全部受影响；此前产品名只存在于 RAG 产品手册中，等于要求 LLM 先检索出 code 再查 SQL，把 RAG 误差引入了本该确定的查询路径。<br>**`production_line`**：补产能后 `changeover_min` 才从死字段变为真实计算——原设计的 `plan_start`/`plan_end` 已是绝对时间，延误判定退化成两个日期比大小，而 §3.2 声称的「需计算换色调机损耗」此前是空的。<br>**`write_intent`**：三位专家独立指出 `confirm_token` 的「一次性」此前只是文字承诺，无落库位置、无唯一约束、无 TTL。新表含 `session_id` 绑定（防持令牌的他方会话完成确认）、`state` CHECK 枚举、原子消费 SQL 与三条不可省约束。<br>**`audit_log` 扩展**：补 `phase(attempt/outcome)`——两段式要写两行却无字段区分，与 P1.3.2 自相矛盾；补变更前后值与追溯目标（宪法第一条）、TTFT 与 token 计量、`retrieval_ms`；`status` 枚举补 `cancelled`。<br>同时为三张业务表补外键约束，消除 `bu_code` 各存一份且无约束导致的脏数据（如 `BU-A` 配瓷砖 `product_code`）。原 4.1.1–4.1.4 顺延为 4.1.2–4.1.5 |
+| v2.2 | 2026-08-31 | 独立评审修订。**补上全项目最大缺口——身份与会话契约**（P1 详细设计 §2.5）：宪法第一条的操作者、第十条的范围上界、`write_intent` 的会话绑定三条红线都从「会话」取值，而此前无一处定义会话如何建立，若落成「前端传 `X-User-Id` 头」则三条红线同时失效。**补创建订单写端点契约**（P2 详细设计 §3.2）：此前 P2 只定义五个只读工具并声称「均为只读」，而全项目唯一写路径、唯一红线场景的请求体与幂等从未定稿。<br>**解掉宪法第十条与 S1 的正面冲突**：原表述「范围过滤器不接受模型指定」使「年度 × 区域 × 产品三维过滤」和跨 BU 用户无法实现；改为「上界由服务端注入，模型只能在内收窄、永不扩大」，且越界须显式报错而非静默降级——静默会让越权尝试无法被审计发现。<br>修正多处跨文档矛盾：`models.yaml` 的 `api_key_env` 与 `api_key: ${}` 两套 schema（前者会直接挂 CI 检查）· 评测档数三处三种说法 · `model_tier` 注释 M0..M3 · §15.3 的「M1（4090）档」· §12.2 仍要求已删的 `confirmed_at` · 宪法条数 9 → 11 |
 
 ---
 
@@ -303,7 +304,7 @@ CREATE TABLE audit_log (
   action_type     VARCHAR(8)  NOT NULL,         -- read / write
   source          VARCHAR(16) NOT NULL,         -- langgraph / dify / rpa
   tool_name       VARCHAR(64),
-  model_tier      VARCHAR(8),                   -- M0..M3，用于评测归因
+  model_tier      VARCHAR(8),                   -- M0..M4，用于评测归因
   request_payload JSONB,                        -- 已脱敏
   response_payload JSONB,
   latency_ms      INTEGER,
@@ -550,17 +551,17 @@ v1.1 曾判断「本机 16GB 扛不住 Dify 全家桶 + PostgreSQL」。该判�
 # config/models.yaml
 tiers:
   M0: { base_url: "http://127.0.0.1:11434/v1", model: "qwen3:8b",
-        api_key_env: null,                 extra_body: { think: false } }
+        api_key: null,          # Ollama 无需鉴权                 extra_body: {}   # 空是查证四种方式后确认无解，非配置遗漏（P0 实测） }
   M1: { base_url: "http://127.0.0.1:18001/v1", model: "Qwen3.8-27B-NVFP4",
-        api_key_env: VLLM_API_KEY,         # AutoDL 5090, ssh -L 18001
+        api_key: "${VLLM_API_KEY}",         # AutoDL 5090, ssh -L 18001
         extra_body: { chat_template_kwargs: { enable_thinking: false } } }
   M2: { base_url: "http://127.0.0.1:18002/v1", model: "Qwen3.8-27B",
-        api_key_env: VLLM_API_KEY,         # AutoDL A100, ssh -L 18002
+        api_key: "${VLLM_API_KEY}",         # AutoDL A100, ssh -L 18002
         extra_body: { chat_template_kwargs: { enable_thinking: false } } }
   M3: { base_url: "<AutoDL.Art 控制台『令牌管理』获取>", model: "Qwen3.5-397B-A17B",
-        api_key_env: AUTODL_ART_API_KEY,   extra_body: { }   # P1 实测确认关闭方式 }
+        api_key: "${AUTODL_ART_API_KEY}",   extra_body: { }   # P1 实测确认关闭方式 }
   M4: { base_url: "https://api.deepseek.com", model: "deepseek-v4-flash",
-        api_key_env: DEEPSEEK_API_KEY,     extra_body: { }   # P1 实测确认关闭方式 }
+        api_key: "${DEEPSEEK_API_KEY}",     extra_body: { }   # P1 实测确认关闭方式 }
 ```
 
 **M4 实测能力**：上下文 **1M**、最大输出 **384K**、**Tool Calls ✓**、JSON Output ✓。
@@ -911,7 +912,6 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 ### 12.2 幂等与审计要求
 
 - `confirm_token` 一次性，同一 token 只能成功执行一次，重复提交返回原结果而非重复创建
-- 审计记录须包含：`trace_id`、`user_id`、`model_tier`、入参出参（脱敏）、耗时、`confirm_token`、`confirmed_at`
 - 用户取消确认同样落审计，`status='cancelled'`
 - 审计表仅追加不更新，不提供删除接口
 
@@ -950,7 +950,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 
 **测试集构成**：S1–S5 各 6 条常规用例；边界 10 条覆盖缺参、模糊意图、跨 BU 歧义、超范围提问、API 超时、库存不足、幂等重复提交、追问轮次超限、拒绝确认、越权查询。
 
-**评测维度归因**：每条用例在 M1/M2/M3 三档各跑一次，结果按 `model_tier` 归因，输出对比矩阵。M0 仅用于 CI 冒烟，不进对比结论。
+**评测维度归因**：每条用例在 **M1/M2/M3/M4 四档**各跑一次，结果按 `model_tier` 归因，输出对比矩阵。M0 仅用于 CI 冒烟，不进对比结论。
 
 ---
 
@@ -979,7 +979,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | 阶段 | 原 | 新 | 主要增量 |
 |---|---|---|---|
 | **P0 前置验证** | — | **5.3** | 全新增；含后补的 P0-9 多模态 embedding 1.0（低优先级待办） |
-| **P1 地基** | 4.0 | **8.3** | 审计基座含变更前后值与两段式写入、`REVOKE UPDATE/DELETE` 防篡改；CI 收敛为不含 LLM 的宪法机械检查（0.75）；`make backup` + **恢复演练**（0.35）；宪法修订（第十条不可信输入 + 版本同步） |
+| **P1 地基** | 4.0 | **8.65** | 审计基座含变更前后值与两段式写入、`REVOKE UPDATE/DELETE` 防篡改；CI 收敛为不含 LLM 的宪法机械检查（0.75）；`make backup` + **恢复演练**（0.35）；宪法修订（第十条不可信输入 + 版本同步） |
 | **P2 数据 + API** | 5.5 | **9.0** | **产品/色号主数据表、`production_line` 产能表、排产关联到订单行、`stage_seq`、`uom`、`batch_policy`、`attrs JSONB`**；fixture 规格 + 固定种子 + 断言校验（0.5）；API 契约含错误模型与分页（0.5）；权限最小模型（0.5）；**预注册评分细则**（0.5）；8 份文档的标识体系与数据同步设计 |
 | **P3 RAG + Agent** | 10.5 | **15.5** | `interrupt()` 拓扑拆分 + `write_intent` 表（1.0）；L2 改零训练 embedding 最近邻 + margin 判据 + 意图粘性（1.2）；分档追问 + 槽位修正（1.3）；Prompt Injection 不变量声明 + 定界符（0.5）；**前端只做对话流 + 二次确认弹窗**，其余组件移 P5 |
 | **P4 Workflow + RPA** | 9.0 | **10.3** | D12 确认改用 `interrupt()` 并**移出降级关键路径**；`trace_id` 写入 ERP 表单使两侧日志可 join；attempt-first 审计 |
@@ -995,7 +995,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 | 口径 | 结果 |
 |---|---|
 | 62.8 人天 ÷ 5 天/周（旧口径） | 12.6 周 |
-| 65.35 人天 ÷ **4 有效天/周**（现实口径） | **16.3 周** |
+| 65.70 人天 ÷ **4 有效天/周**（现实口径） | **16.4 周** |
 | + 25% 缓冲（匹配未测组合数量，集中持有不铺进各阶段） | **约 20 周** |
 
 **缓冲动用规则**：缓冲集中持有，不预先分配到阶段。设 **P3 中点为日历决策门**——到点未达既定进度即执行 §15.3 的砍范围清单，由用户决策，不由实施者临场决定。
@@ -1008,7 +1008,7 @@ LangGraph 本身不是瓶颈——它是跑在 FastAPI async event loop 里的 P
 2. P5 的 pgvector→Qdrant 切换验证与全量重跑（省 1.0）
 3. 通知渠道 4 → 1（省 1.0，同时消掉三个 IM 平台的外部凭据依赖）
 4. Dify 12 项 → 6 项，保留 D1/D2/D3/D5/D7/D12（省 1.5–2.0）
-5. M1（4090）档（省 1.0–1.5，成本数据点可由 M2 吞吐 + 报价推算）
+5. M1（5090）档（省 1.0–1.5，成本数据点可由 M2 吞吐 + 报价推算）
 6. 模拟遗留 ERP 降为单页表单（省 1.5，保留降级链路与审计留痕）
 7. 10 并发压测 → 3 并发冒烟 + 书面外推（省 0.5）
 

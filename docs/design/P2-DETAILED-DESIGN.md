@@ -17,7 +17,7 @@
 |---|---|
 | §1 编码规则 | P3 的 L1 正则路由 · P2.2 数据生成 · P5 测试用例 |
 | §2 **工具 schema 设计规则** | P3 Agent · P4 Dify 导入 · P5 评测 —— **本文档杠杆最大的一节** |
-| §3 五个工具的完整签名 | 同上 |
+| §3 五个只读工具签名 + §3.2 写端点契约 | 同上；写端点是全项目唯一写路径 |
 | §4 响应包络与分页语义 | 所有端点 · LLM 对结果的理解 |
 | §5 权限注入点 | P3 检索过滤 · P4 越权用例 |
 | §6 fixture 规格的结构 | P5 全部 40 条用例 |
@@ -60,13 +60,30 @@ P3 的 L1 正则路由要靠它零延迟识别意图，所以编码必须**自�
 
 宪法第十条要求「数据范围过滤器由服务端依据用户身份注入，不接受模型或前端指定」。落到工具 schema 上就是：
 
-| 禁止出现在 schema 中 | 为什么 |
-|---|---|
-| `bu_code` | 用户说「查建陶的」即越权。它既不构成权限控制，又是注入靶点 |
-| `region` | 同上 |
-| `user_id` / `session_id` / `tenant` | 身份不能由模型声明 |
+| 参数 | 可否出现在 schema | 语义 |
+|---|---|---|
+| `user_id` / `session_id` / `tenant` | 🔴 **绝对禁止** | 身份不能由模型声明 |
+| `bu_code` / `region` | 🟡 **可以，但只用于收窄** | 见下 |
 
-这三类由 `gateway/deps.py` 从会话注入到 SQL 的 WHERE 子句，**模型看不到、也改不了**。
+**范围参数不是简单的「禁止」，而是「上界由服务端定，模型只能在内收窄」**（宪法第十条）。若完全禁止，S1 的「年度 × 区域 × 产品三维过滤、多轮追问细化」和跨 BU 用户的场景就实现不出来——集团质量部无法说「先看华东的」。
+
+```
+allowed = 服务端从身份取出的集合        # 模型看不到
+requested = 模型传入的范围参数（可为空）   # 空则用 allowed 全集
+effective = requested ∩ allowed
+若 effective 为空且 requested 非空 → 抛 AUTH_SCOPE_EXCEEDED（不静默降级）
+```
+
+**越界必须显式报错而非静默忽略**——静默会让越权尝试无法被审计发现，而「越权查询」是 §14 的验收用例。
+
+范围参数的 description 须写明约束：
+
+```python
+region: str | None = Field(
+    description="区域，如「华东」。仅用于在你已有权限范围内收窄查询，"
+                "不能用于访问其他区域——越界会被服务端拒绝。留空则返回你有权查看的全部区域。"
+)
+```
 
 > 实现时最容易违反的地方是「顺手加个 `bu_code` 参数让模型指定，省得服务端判断」。写 schema 时若发现某个参数能让模型跨越数据边界，它就该从 schema 里删掉。
 
@@ -127,7 +144,7 @@ FastAPI 对 `str | None` 生成 OpenAPI 3.1 的 `anyOf: [{type:string},{type:nul
 
 ## 3. 五个工具的签名
 
-对应五个主线场景。**均为只读**——写操作不进工具集（宪法第二条：写路径只走 LangGraph；且 Dify 导入的工具集里不得有写端点）。
+对应五个主线场景的**只读**部分。写端点见 §3.2——它不进工具集（宪法第二条：写路径只走 LangGraph，且 Dify 导入的工具集里不得有写端点）。
 
 ```python
 query_policy(
@@ -171,6 +188,54 @@ query_production_plan(
 ```
 
 **注意 `query_product` 的存在本身就是设计结论**：没有它，「白色岩板的库存」无法落到 `product_code`——此前产品名只在 RAG 产品手册里，等于要求模型先检索再查 SQL，把 RAG 误差引进确定性查询路径。
+
+### 3.2 创建订单写端点
+
+§3 的五个工具**均为只读**且会被导入 Dify；写端点**不进工具集**（宪法第二条：写路径只走 LangGraph），由 LangGraph 的下单子图直接调用。
+
+```python
+POST /api/v1/orders
+
+class CreateOrderRequest(BaseModel):
+    confirm_token: str                 # 必填。无令牌直接抛 ConfirmationRequired（宪法第一条）
+    # ⚠️ 不含任何业务字段 —— 载荷从 write_intent.payload 取
+```
+
+**请求体只有令牌，没有业务参数**，这是宪法第十条的直接要求：合法令牌配一份篡改过的载荷即可绕过二次确认，**重放防住了、参数篡改没防**。业务载荷在用户确认时已存入 `write_intent.payload`，执行时只从库里取。
+
+**幂等**：`sales_order.confirm_token` 有 UNIQUE 约束（P2.1.3）。
+
+```
+INSERT ... ON CONFLICT (confirm_token) DO NOTHING RETURNING order_no
+  ├─ 有返回 → 首次创建，返回 201
+  └─ 无返回 → 重复提交，SELECT 既有行返回 200 + 原 order_no
+```
+
+用唯一索引仲裁竞态，不用应用层「先查后写」——后者在并发下必然有窗口。
+
+**执行时序**（与 [P1 详细设计 §3.2](P1-DETAILED-DESIGN.md#32-时序) 的两段式对齐）：
+
+```
+① 原子消费令牌（P1 §4.1），拿到 payload；0 行则抛 CONF_TOKEN_INVALID
+② 写 attempt 审计行（独立池）
+③ 业务事务：
+     ├─ SELECT ... FOR UPDATE 候选批次 → 复检库存
+     │    不足则 ROLLBACK，抛 BIZ_INSUFFICIENT_STOCK（retryable=false，不触发 RPA 降级）
+     ├─ INSERT sales_order ... ON CONFLICT DO NOTHING
+     ├─ INSERT sales_order_line（line_no 从 1 递增）
+     └─ COMMIT
+④ 写 outcome 审计行，含 before_value / after_value
+```
+
+**③ 的库存复检不可省**：确认卡片生成到用户点确认之间隔着人的思考时间，库存可能已被他人占用。**本期不做库存预占**（要配套释放与超时回收，成本不小），代价是复检失败时退回追问——这比预占更诚实。
+
+**响应**：
+
+```json
+{ "data": { "order_no": "SO-2026-000123", "status": "已确认",
+            "lines": [ ... ], "created_at": "..." },
+  "trace_id": "..." }
+```
 
 ### 3.1 S5 的延误推演
 

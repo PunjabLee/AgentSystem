@@ -23,7 +23,7 @@
 | P0-2 | pgvector 0.8.6 + HNSW + 四维过滤检索 | 0.5 | ✅ 通过 |
 | P0-3 | 前端栈 spike（React 19 + antd 6 + Vite 8 + TS 7） | 0.25 | ✅ 通过 |
 | P0-4 | R1 型号核实与量化选型 | 0.2 | ✅ 完成，**发现型号错误** |
-| P0-5 | Dify 外部单实例整合（方案 B）+ 容器内存实测 | 0.5 | ✅ **通过** |
+| P0-5 | 单 PostgreSQL 实例整合 + 容器内存实测 | 0.5 | ✅ **通过**<br>⚠️ 最终形态为**回归 Dify compose 托管 + 宿主暴露 5432**，非中途试过的「外部独立实例（方案 B）」。详见 [P0-VERIFICATION §10](P0-VERIFICATION.md) |
 | P0-6 | RAG spike：引用可溯源 + 元数据过滤强证据 | 0.5 | ✅ **通过**，五题三层全过 |
 | P0-7 | AutoDL 开机 → SSH 隧道 → vLLM 起（**须返回结构化 `tool_calls`**） | 1.5 | ⏸ **转待办**（用户决定优先走厂商 API）；⛔ 阻塞于 D1 |
 | P0-9 | 多模态 embedding（WeMM-2B + Xinference） | 1.0 | ⏸ 低优先级待办 |
@@ -31,7 +31,7 @@
 
 ---
 
-## P1 地基（8.3 人天，评审后修订）
+## P1 地基（8.65 人天，评审后修订）
 
 > **编码前须读 [P1 详细设计](design/P1-DETAILED-DESIGN.md)**：本清单说「做什么」，详细设计定「接口长什么样」。六处跨模块契约（LLMGateway 接口与 `models.yaml`、审计装饰器与两段式时序、`write_intent` 状态机、错误模型、CI 检查规则、Makefile 目标）在那里定稿，定错了 P2–P5 全要跟着改。
 >
@@ -55,12 +55,13 @@
 
 > **2026-08-31 三专家评审结论**：8.3 人天为按评审修订后的任务合计。交付评审独立重估为 **10.1 人天**（主要在 P1.2 流式+重试+降级链 0.5→1.2、P1.5.2 自研 linter 0.45→0.8），该差额**未纳入**，作为风险敞口记录于此——若 P1 实际超出 8.3，优先从 P5（17.7 人天，弹性最大）吸收。
 
-### P1.1 仓库与工程化（1.4）
+### P1.1 仓库与工程化（1.75）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.1.1 | 目录骨架、`pyproject.toml`（uv）、`package.json`、Makefile 目标 | 0.3 | — |
-| P1.1.2 | `.env.example` 建立（当前**缺失**），所有密钥项列全并加注释 | 0.2 | — |
+| P1.1.7 | **身份与会话中间件**（[P1 详细设计 §2.5](design/P1-DETAILED-DESIGN.md)）：静态 Bearer → `RequestContext` → contextvar<br>宪法一的操作者、宪法十的范围上界、`write_intent` 的会话绑定三处都从它取值 | 0.3 | P1.1.1 |
+| P1.1.2 | `.env.example` 建立（当前**缺失**），所有密钥项列全并加注释<br>**权威变量清单**：`AUTODL_ART_API_KEY` · `DEEPSEEK_API_KEY` · `DIFY_DATASET_API_KEY` · `AUTODL_SSH_HOST/PORT` · PG 连接串 · 各用户 Bearer Token | 0.25 | — |
 | P1.1.3 | 分支策略落地：`main` 保护、`feat/p{N}-*`、`docs/*` | 0.2 | — |
 | P1.1.5 | **Alembic 迁移框架 + 初始基线**【自查补】<br>P1 要建 `audit_log` 与 `write_intent` 两张表，而 Alembic 原排在 P2.1.8 —— 无迁移工具就只能裸 SQL 建表，P2 引入时须回填基线<br>🔴 **`env.py` 必须配 `include_object` 过滤 `checkpoints*` 表**——`AsyncPostgresSaver.setup()` 自建的表不在 ORM 模型里，`--autogenerate` 会为它们生成 `drop_table`（数据评审）<br>用 **`app_migrator`** 跑迁移，不得用 `app_rw` | 0.3 | **P1.3.5** |
 | P1.1.6 | **`max_connections` 调整 + 审计独立小池**<br>⚖️ **两位评审结论相反，裁决取交付方**：交付评审指出 asyncpg 业务池、checkpointer 池、评测脚本在 P1 **都不存在**，P1 能真做的只有 `max_connections` 与审计小池；数据评审给的池位核算（峰值约 55，建议 `max_connections=120`、`work_mem=8MB`）**留作 P3 依据**<br>⚠️ **项目有两个 PG 驱动**：业务用 asyncpg，`langgraph-checkpoint-postgres` 3.1.2 实际依赖 **psycopg>=3.2 + psycopg-pool**（已查 PyPI 确认）。宪法第四条的机械检查禁的是 **`psycopg2`（同步旧版）**，**不得误伤 psycopg3** | 0.1 | P1.1.1 |
@@ -204,7 +205,7 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 | P2.3.1 | FastAPI 骨架 + Gateway 分层（鉴权/限流/审计埋点） | 0.5 | P1.3.3 |
 | P2.3.2 | **统一响应包络 + 错误码表**：结构化 `{code, message, retryable}` 区分「业务拒绝」与「系统故障」，否则 RPA 降级会误触发【评审】 | 0.4 | P2.3.1 |
 | P2.3.3 | **分页约定** `limit/offset/total_count`——无分页会让 LLM 把截断结果当完整结果，表现为幻觉但成因是接口设计【评审】 | 0.3 | P2.3.2 |
-| P2.3.4 | 五类查询端点 + 创建订单写端点 | 0.8 | P2.3.2 |
+| P2.3.4 | 五类查询端点 + 创建订单写端点（✅ **契约已在 [P2 详细设计 §3 / §3.2](design/P2-DETAILED-DESIGN.md) 定稿**） | 0.8 | P2.3.2 |
 | P2.3.5 | OpenAPI 3.1 导出；**所有枚举用 `Literal`/`Enum` 并写 description**（对 function calling 准确率杠杆最大处）【评审】 | 0.3 | P2.3.4 |
 | P2.3.6 | **Dify 自定义工具导入探针**——FastAPI 的 3.1 schema（`anyOf:[{type:string},{type:null}]`）历史上导入器兼容性不佳，第一天就试，别等 P4【评审】 | 0.2 | P2.3.5 |
 
@@ -263,7 +264,7 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 |---|---|---|---|
 | P5.1 | 评测集：40 条主线 + RAG 独立 50 条 + 注入 8 条 + 边界扩充 | 2.0 | 【评审】RAG 侧原仅约 8 条，样本量无法表达 85% |
 | P5.2 | 评测框架（多轮 + interrupt + 断点续跑 + **失败类型归因**） | 1.8 | 【评审】按意图错/槽位错/工具格式错/业务逻辑错分类 |
-| P5.3 | **四档 × 3 次运行**，固定温度与种子，thinking 状态作为显式变量记录 | 1.2 | 【评审】否则运行间方差与档位差异混淆 |
+| P5.3 | **M1/M2/M3/M4 四档 × 3 次运行**，固定温度与种子，thinking 状态作为显式变量记录 | 1.2 | 【评审】否则运行间方差与档位差异混淆 |
 | P5.4 | 人工核验 + LLM-as-judge 双判卷 + 人机一致率 | 1.5 | 【评审】缓解自评闭环 |
 | P5.5 | 并发压测 + vLLM `/metrics` 快照 | 0.7 | 【评审】无服务端指标则「10 并发劣化」答不出原因 |
 | P5.6 | pgvector → Qdrant 切换验证 | 1.0 | 缓冲耗尽时的首个削减候选 |
