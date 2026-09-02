@@ -31,7 +31,7 @@
 
 ---
 
-## P1 地基（8.65 人天，评审后修订）
+## P1 地基（8.75 人天，评审后修订）
 
 > **编码前须读 [P1 详细设计](design/P1-DETAILED-DESIGN.md)**：本清单说「做什么」，详细设计定「接口长什么样」。六处跨模块契约（LLMGateway 接口与 `models.yaml`、审计装饰器与两段式时序、`write_intent` 状态机、错误模型、CI 检查规则、Makefile 目标）在那里定稿，定错了 P2–P5 全要跟着改。
 >
@@ -134,14 +134,14 @@ LLMGateway 的前提是统一走 OpenAI 兼容接口，而 **M0 的 thinking 开
 | P1.2.4 | **token 计量与 TTFT 埋点**（喂给审计表）【评审】 | 0.3 | P1.3.1 |
 | P1.2.5 | **`make chat` 命令 + 一个 stub 工具 schema**【自查补】<br>出口判据要求「三档均能回话且返回结构化 `tool_calls`」，但 `make chat` 此前无实现任务，且测 `tool_calls` 需要工具定义——而业务 API 属 P2。须在 P1 建一个最小 stub 工具（如 `query_inventory`）供验证 | 0.3 | P1.2.3 |
 
-### P1.3 审计基座（2.5）
+### P1.3 审计基座（2.6）
 
 | ID | 任务 | 人天 | 依赖 |
 |---|---|---|---|
 | P1.3.1 | `audit_log` DDL 扩展【评审】<br>在设计文档 §4 现有字段（`trace_id`/`session_id`/`user_id`/`action_type`/`source`/`tool_name`/`model_tier`/`status`/`confirm_token`/`created_at` 等）基础上新增：<br>· `target_table` / `target_id` / `before_value JSONB` / `after_value JSONB`（宪法第一条的「变更前后值」）<br>· `ttft_ms` / `prompt_tokens` / `completion_tokens` / `retrieval_ms`（评测归因）<br>· 🔴 **`phase VARCHAR(8)`（`attempt` / `outcome`）**——P1.3.2 要写两行，此前**无字段可区分**，两任务自相矛盾<br>· `status` 枚举补 `cancelled`；去掉 `confirmed_at`（与「仅追加」冲突，改为 outcome 行承载） | 0.45 | **P1.3.5** |
 | P1.3.2 | **两段式写入**：独立连接写 attempt 行 → 业务事务提交/回滚 → 追加 outcome 行，同 `trace_id` 串联【评审】<br>🔴 **审计须走独立小池（max=3），不得与业务共池**——业务事务已持一条连接，再从同一池 acquire 第二条，池大小 N 时 N 个并发全卡在 acquire（数据评审）<br>🔴 **`before_value` / `after_value` 只落 outcome 行**：前值必须在业务事务内、对目标行加锁后读；attempt 行写在事务之外，读到的前值不可信，只记「打算做什么」<br>含回滚路径单测 | 0.8 | P1.3.1 |
 | P1.3.3 | 统一审计装饰器（宪法第一条的落地物） | 0.4 | P1.3.2 |
-| P1.3.4 | **数据库级防篡改**【2 人收敛补强】<br>`REVOKE UPDATE, DELETE ON audit_log FROM app_rw` + `BEFORE UPDATE OR DELETE` 触发器<br>🔴 **加 `BEFORE TRUNCATE` 语句级触发器**——`TRUNCATE` 既不触发 UPDATE/DELETE 触发器，也不受 `REVOKE UPDATE,DELETE` 约束，是两位专家共同指出的绕过口<br>CI 断言：`app_rw` 对 `audit_log` 无 UPDATE/DELETE/TRUNCATE | 0.25 | **P1.3.5** |
+| P1.3.4 | **数据库级防篡改** —— 三层，缺一层即可被绕过【2 人收敛 + 实证】<br>① `REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM app_rw, PUBLIC`<br>② `BEFORE UPDATE OR DELETE` 行触发器 + `BEFORE TRUNCATE` 语句级触发器（`TRUNCATE` 不触发前者也不受 `REVOKE UPDATE,DELETE` 约束）<br>③ 🔴 **`ddl_command_end` 事件触发器拦截对 `audit_log` 的 ALTER**——实测属主一句 `ALTER TABLE … DISABLE TRIGGER` 即可拆掉 ①②，而 **Alembic 正是以属主身份运行**；事件触发器对属主与超级用户均有效<br>详见 [P1 详细设计 §3.4](design/P1-DETAILED-DESIGN.md) 的三层攻击实测<br>CI 断言：`app_rw` 的 UPDATE/DELETE/TRUNCATE、属主的 `DISABLE TRIGGER` 四者均须失败 | 0.35 | **P1.3.5** |
 | P1.3.6 | **`trace_id` 的生成与全链路传播**【自查补】<br>`audit_log` 有该字段、P1.3.3 的装饰器依赖它、§7.5 的 Dify 回写也要它，但此前无任务定义谁生成、如何贯穿请求（含跨进程传到 Dify） | 0.2 | P1.3.1 |
 | **P1.3.5** | **角色与授权 SQL —— 必须排在所有建表任务之前**【2 人收敛】<br>**四个角色**（原为三个）：`app_migrator`（agentsystem 库属主，Alembic 专用，有 CREATE）· `app_rw`（运行时，`audit_log` 仅 INSERT+SELECT）· `app_ro`（对 `dify` 库只读）· `dify_owner`（对 `agentsystem` 无 CONNECT 且非 superuser）<br>🔴 **若 Alembic 用 `app_rw` 跑迁移，它即成为 `audit_log` 的属主——属主恒有全部权限且可 `DISABLE TRIGGER`，P1.3.4 的防篡改整层形同虚设**<br>`ALTER DEFAULT PRIVILEGES FOR ROLE` 只对此后由该角色建的对象生效，故必须前置 | 0.4 | P1.1.1 |
 

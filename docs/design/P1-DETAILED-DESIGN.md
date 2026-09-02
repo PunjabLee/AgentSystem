@@ -18,6 +18,7 @@
 | §2 `LLMGateway` 接口与 `models.yaml` | P2/P3/P4/P5 全部调用，改签名动全身 |
 | **§2.5 身份与会话契约** | **三条红线全悬于此**：宪法一的操作者、宪法十的范围上界、`write_intent` 的会话绑定 |
 | §3 审计装饰器与两段式时序 | 所有写操作挂它；评审指出的连接池自死锁与前值时机必须先定 |
+| **§3.4 防篡改威胁模型** | **实测三层攻击**；属主可 `DISABLE TRIGGER` 拆掉整层，须加 Event Trigger |
 | §4 `write_intent` 状态机 | 确认流程横跨 Gateway / LangGraph / 前端三方 |
 | §5 错误模型 | RPA 降级判定（P4）靠它区分「业务拒绝」与「系统故障」 |
 | §6 CI 机械检查规则 | 宪法 11 条与检查的映射关系，缺一条则该原则形同虚设 |
@@ -286,6 +287,59 @@ def audited(
 ```
 
 **约定**：`trace_id` / `session_id` / `user_id` 由 `gateway/deps.py` 注入 request context，装饰器从 context 取，**不从函数参数取**——否则每个业务函数都要多三个参数，且调用方可伪造。
+
+---
+
+## 3.4 审计防篡改的威胁模型（2026-08-31 实证）
+
+评审曾指出「若 Alembic 用属主账号跑迁移，属主恒有全部权限且可 `DISABLE TRIGGER`，防篡改整层形同虚设」。该判断**部分成立**，实测结果如下。
+
+### 3.4.1 三层威胁的实测
+
+在临时库中按 P1.3.4 + P1.3.5 的设计建四角色（全部 `NOSUPERUSER`）、建表、施加 `REVOKE` 与行触发器，逐层攻击：
+
+| 攻击者 | 动作 | REVOKE + 行触发器 | 加 Event Trigger 后 |
+|---|---|---|---|
+| `app_rw`（运行时） | INSERT | ✅ 允许 | ✅ |
+| `app_rw` | UPDATE / DELETE / TRUNCATE | ✅ `permission denied` | ✅ |
+| `app_rw` | DROP TABLE | ✅ `must be owner` | ✅ |
+| **`app_migrator`（属主）** | UPDATE / TRUNCATE | ✅ 行触发器拦住 | ✅ |
+| **`app_migrator`** | **`ALTER TABLE … DISABLE TRIGGER`** | 🔴 **成功，此后可任意篡改** | ✅ **被拦** |
+| **`postgres`（超级用户）** | `DISABLE TRIGGER ALL` | 🔴 直接绕过 | ✅ **被拦** |
+
+**两个超出预期的结论**：
+
+1. **行触发器对属主有效**——属主直接 UPDATE/TRUNCATE 会被拦。评审假设「属主恒有全部权限」在这一层不成立，权限与触发器是两套机制。
+2. **Event Trigger 对超级用户同样有效**——DDL 事件触发器在命令执行时触发，不区分调用者角色。
+
+### 3.4.2 因此 P1.3.4 必须包含 Event Trigger
+
+只有 `REVOKE` + 行触发器，属主一句 SQL 即可拆掉整层——**而 Alembic 正是以属主身份运行**，这条路径天天都在用。
+
+```sql
+CREATE OR REPLACE FUNCTION guard_audit_ddl() RETURNS event_trigger
+LANGUAGE plpgsql AS $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
+    IF r.object_identity LIKE '%audit_log%' AND r.command_tag = 'ALTER TABLE' THEN
+      RAISE EXCEPTION '禁止对 audit_log 执行 ALTER（宪法第一条）：%', r.object_identity;
+    END IF;
+  END LOOP;
+END $$;
+
+CREATE EVENT TRIGGER trg_guard_audit_ddl
+  ON ddl_command_end EXECUTE FUNCTION guard_audit_ddl();
+```
+
+⚠️ **副作用**：该事件触发器会拦住**所有**对 `audit_log` 的 `ALTER`，包括后续合法的 schema 变更。迁移需要改这张表时，流程是「超级用户 `DROP EVENT TRIGGER` → 迁移 → 重建」，且**该操作本身应被记录**。这是刻意的摩擦——审计表的结构变更就该是需要显式解锁的动作。
+
+### 3.4.3 能力边界（须写入 PoC 报告）
+
+**超级用户仍可 `DROP EVENT TRIGGER` 后绕过。** 数据库内部机制的上限就在这里——再往上需要数据库之外的手段：WORM 存储、审计日志实时外发到独立系统、或数据库审计插件（pgAudit）。
+
+**PoC 阶段接受这个边界**，因为超级用户凭据不下发、且该绕过需要多步显式操作。**规模化落地前必须补外部手段**——这一条应与 §6.1 的「数据安全性维度无实测证据」并列写入报告的结论边界。
+
 
 ---
 
