@@ -4,10 +4,11 @@
 是数据库自身的权限与触发器行为，用 mock 验证等于什么都没验证。
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentsystem.settings import get_settings
 
@@ -61,3 +62,31 @@ def seeded_audit_row(rw_engine: Engine) -> str:
                 {"t": PROBE_TRACE_ID},
             )
     return PROBE_TRACE_ID
+
+
+@pytest.fixture
+async def db() -> AsyncIterator[AsyncSession]:
+    """一个自动回滚的业务会话。
+
+    每个用例包在一个事务里、结束即回滚 —— write_intent 无防篡改约束，
+    本可以删数据收尾，但回滚更彻底：连序列消耗都不留。
+    """
+    from agentsystem.db.session import get_app_sessionmaker
+
+    async with get_app_sessionmaker()() as session:
+        await session.begin()
+        try:
+            yield session
+        finally:
+            await session.rollback()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _dispose_engines_at_end() -> Iterator[None]:
+    """收尾关闭连接池，避免 pytest 退出时报 event loop 已关闭。"""
+    yield
+    import asyncio
+
+    from agentsystem.db.session import dispose_engines
+
+    asyncio.run(dispose_engines())

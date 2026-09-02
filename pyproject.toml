@@ -18,6 +18,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.3.4",
     "httpx>=0.28.0",
     "langgraph-checkpoint-postgres>=3.1.2",
+    "greenlet>=3.5.5",
 ]
 
 [dependency-groups]
@@ -68,6 +69,11 @@ convention = "google"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-q --strict-markers"
+# 事件循环必须是 session 级：引擎在模块级 lru_cache 缓存，若每个用例
+# 新建循环，上一循环的连接会被复用，报 "Event loop is closed"。
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 
 [build-system]
 requires = ["hatchling"]
