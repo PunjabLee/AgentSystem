@@ -60,9 +60,42 @@ make p1-exit
 | `app_migrator` | `agentsystem` 库属主，可建表 | Alembic |
 | `app_rw` | 业务表增删改查；**`audit_log` 上只有 INSERT/SELECT** | 运行时 |
 | `app_ro` | 只读，含 `dify` 库的 CONNECT | 评测与排查 |
+| `dify_owner` | `dify` / `dify_plugin` 的属主；**对 `agentsystem` 无 CONNECT** | Dify |
 
-三者均 `NOSUPERUSER`。分离不是洁癖：迁移账号是表属主，若与运行时账号合一，
+四者均 `NOSUPERUSER`。分离不是洁癖：迁移账号是表属主，若与运行时账号合一，
 属主一句 `ALTER TABLE ... DISABLE TRIGGER` 就能拆掉审计防篡改的前两层。
+
+`agentsystem` 已 `REVOKE ALL ... FROM PUBLIC` 并逐个显式授予 CONNECT
+（`scripts/04_database_isolation.sql`）。这一步堵的是绕过审计防护最省事的
+路径：不必拆触发器，换个能连库的角色登录即可。
+
+### ⚠️ 未完成项：Dify 仍以 postgres（超级用户）连库
+
+**超级用户绕过一切 ACL。** 只要 Dify 用 `postgres`，任何能拿到它数据库凭据
+的路径都能对 `agentsystem` 执行 `DROP EVENT TRIGGER` 后随意改写 `audit_log`
+—— P1.3.4 的三层防护对它完全无效，`scripts/04` 只关掉了非超级用户那条路径。
+
+切换需停机，步骤：
+
+```bash
+# ① 停 Dify
+cd <dify>/docker && docker compose stop
+
+# ② 转移两个库的对象属主（145 表 + 13 表，逐类显式 ALTER）
+psql -U postgres -d dify        -f scripts/05_switch_dify_to_dify_owner.sql
+psql -U postgres -d dify_plugin -f scripts/05_switch_dify_to_dify_owner.sql
+
+# ③ 改 Dify 的 .env
+#    DB_USERNAME=dify_owner
+#    DB_PASSWORD=<PG_DIFY_OWNER_PASSWORD>
+
+# ④ 起 Dify 并验证知识库检索正常
+docker compose up -d
+```
+
+脚本刻意**不用** `REASSIGN OWNED BY postgres TO dify_owner`：该命令除当前库
+的对象外还会改共享对象属主，包括 `postgres` / `template0` / `template1`
+等数据库，一条命令波及整个集群且无法局部回滚。
 
 ### 连接数核算（P1.1.6）
 
