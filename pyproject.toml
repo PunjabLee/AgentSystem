@@ -17,6 +17,7 @@ dependencies = [
     # langgraph-checkpoint-postgres 依赖 psycopg>=3.2，非 asyncpg
     "psycopg[binary,pool]>=3.3.4",
     "httpx>=0.28.0",
+    "langgraph-checkpoint-postgres>=3.1.2",
 ]
 
 [dependency-groups]
@@ -28,7 +29,16 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+# P0 证据脚本一并排除出 formatter：per-file-ignores 只管 lint，
+# formatter 仍会重排，那正是我们要避免的（见 lint 段的说明）。
+extend-exclude = [
+    "scripts/p0_*.py",
+    # ruff 0.16 起会格式化 Markdown 内的 Python 代码块。设计文档里的
+    # 代码块是示意与评审留痕，手工折行是为可读性；让格式化器改写它们
+    # 会让 `ruff format --check` 因编辑文档而失败。
+    "*.md",
+]
+target-version = "py314"  # 与 .python-version 一致
 
 [tool.ruff.lint]
 # D = pydocstyle —— 宪法第十一条「代码必须自带注释」的机械落地物
@@ -36,6 +46,11 @@ select = ["E", "F", "I", "UP", "B", "D"]
 ignore = [
     "D203",  # 与 D211 冲突，二选一
     "D213",  # 与 D212 冲突，二选一
+    # D400/D415 要求首行以句点收尾，但只认 ASCII "."，不认中文句号 "。"。
+    # 宪法第十一条要求中文注释，两者直接冲突 —— 关掉标点检查，保留
+    # "首行须是一句完整摘要" 的其余约束（D205 等仍生效）。
+    "D400",
+    "D415",
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -43,7 +58,12 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D"]              # 测试用例名即文档，不强制 docstring
-"src/agentsystem/db/migrations/versions/*" = ["D"]  # Alembic 自动生成
+# Alembic 自动生成；E501 因自动生成的长 DDL 与列注释而放宽
+"src/agentsystem/db/migrations/versions/*" = ["D", "E501"]
+# P0 阶段的一次性验证脚本，已作为证据归档冻结，不再演进。
+# 紧凑写法（分号、单行 if）是当时快速取证的产物，重排会破坏与
+# docs/P0-VERIFICATION.md 中引用行号的对应关系。
+"scripts/p0_*.py" = ["D", "E501", "E701", "E702", "E741"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -27,7 +27,10 @@ data/raw/
 data/vectors/
 *.db
 *.sqlite3
-models/
+# 权重产物。必须锚定 —— 裸 models/ 会匹配任意深度的同名目录，
+# 曾把 src/agentsystem/db/models/（ORM 模型）一并吞掉。
+/models/
+data/models/
 
 # 评测与日志产物
 reports/runs/
