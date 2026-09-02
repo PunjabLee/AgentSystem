@@ -28,8 +28,8 @@ from agentsystem.settings import get_settings
 #: 业务池大小。单人 PoC 且 max_connections 需与 Dify 的 14 个容器共享，
 #: 故刻意保守；P1.1.6 会核算总量。
 _APP_POOL_SIZE = 5
-#: 审计池只承载短事务（一行 INSERT），2 条足够，且必须与业务池隔离。
-_AUDIT_POOL_SIZE = 2
+#: 审计池只承载短事务（一行 INSERT）。P1 详细设计 §3.2 定为 3，与之对齐。
+_AUDIT_POOL_SIZE = 3
 
 
 def _make_engine(pool_size: int) -> AsyncEngine:

@@ -38,6 +38,9 @@ class AuditLog(Base):
     )
     action_type: Mapped[str] = mapped_column(String(8), nullable=False, comment="read | write")
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 入站 X-Trace-Id 的降级留存。客户端可指定权威 trace_id 即可让两次操作
+    # 共用一个 id，污染 attempt/outcome 的串联，故只作参考不作权威（§2.5.3）。
+    client_trace_id: Mapped[str | None] = mapped_column(String(64))
 
     session_id: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(
