@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | v1.0 |
-| 生效日期 | 2026-08-28 |
-| 关联设计文档 | [2026-08-28-enterprise-ai-poc-design.md](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) v1.4 §2.4 |
+| 版本 | v1.1 |
+| 生效日期 | 2026-08-28（v1.1 修订于 2026-09-02） |
+| 关联设计文档 | [2026-08-28-enterprise-ai-poc-design.md](superpowers/specs/2026-08-28-enterprise-ai-poc-design.md) v2.3 §2.4 |
 
 ## 这份文档是什么
 
@@ -84,11 +84,16 @@
 
 ## 七、机密只走环境变量，禁止进入 git
 
-**原则**：API Key、数据库口令、SSH 凭据一律通过环境变量注入。`.env` 必须在 `.gitignore` 中；仓库内只保留 `.env.example` 且其中不含真实值。
+**原则**：API Key、数据库口令、SSH 凭据、**业务系统账号口令**（P4 的 RPA 需要登录 ERP/MES，那套账号与本系统凭据同级）一律通过环境变量注入。`.env` 必须在 `.gitignore` 中；仓库内只保留 `.env.example` 且其中不含真实值。
 
 **为什么**：仓库将在团队内流转并可能外发评审。
 
 **如何验证**：pre-commit 钩子扫描机密特征串；CI 检查 `.env` 未被跟踪。
+
+> **v1.1 补充**：`.gitignore` 之外还有两处被跟踪的配置会承载凭据 ——
+> `config/models.yaml` 的 `api_key` 必须是 `${VAR}` 占位（加载时拒绝明文），
+> `config/users.yaml` 只存 SHA-256。两项均有 pytest 断言
+> （`tests/test_constitution_checks.py`）。只盯 `.env` 拦不住写进被跟踪文件的密钥。
 
 ---
 

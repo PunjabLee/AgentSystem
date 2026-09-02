@@ -1,0 +1,103 @@
+# P1.5.1 CI —— 刻意**不含任何 LLM 调用**。
+#
+# 理由有两条：真实调用会让 CI 结果依赖外部服务可用性与配额，绿灯不再表示
+# 代码正确；且 M0 走本机 Ollama，CI runner 上根本没有。模型侧的连通性由
+# `make chat` 手动冒烟负责（P1 出口判据 1），两者分工明确。
+#
+# ⚠️ 本仓库当前无远程，本文件在推送到 GitHub 后才会实际运行。今天的闸门是
+#    本地的 `make check` 与 `make p1-exit`。
+
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**", "docs/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # 必须与生产同版本同扩展：pgvector 扩展、PG 18 的行为差异都在测试
+        # 覆盖范围内，用官方 postgres 镜像会漏掉 vector 相关路径。
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: ci-postgres-pw
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 同步依赖
+        run: uv sync --dev
+
+      - name: 生成 CI 用 .env
+        # CI 里的凭据是一次性的。演示令牌必须真生成 —— 缺了它们身份用例会
+        # 被 skip，而 skip 不是 pass，最后一步会因此判失败。
+        run: |
+          python - <<'PY'
+          import pathlib, secrets
+          lines = [
+              "PG_HOST=127.0.0.1", "PG_PORT=5432", "PG_DATABASE=agentsystem",
+              "PG_MIGRATOR_USER=app_migrator", f"PG_MIGRATOR_PASSWORD={secrets.token_urlsafe(16)}",
+              "PG_APP_USER=app_rw",           f"PG_APP_PASSWORD={secrets.token_urlsafe(16)}",
+              "PG_RO_USER=app_ro",            f"PG_RO_PASSWORD={secrets.token_urlsafe(16)}",
+              f"SESSION_SIGNING_KEY={secrets.token_urlsafe(48)}",
+          ]
+          pathlib.Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          uv run python scripts/mint_user_tokens.py
+
+      - name: 建角色与库
+        env:
+          PGPASSWORD: ci-postgres-pw
+        run: |
+          set -a; . ./.env; set +a
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -v migrator_pw="$PG_MIGRATOR_PASSWORD" \
+            -v app_pw="$PG_APP_PASSWORD" \
+            -v ro_pw="$PG_RO_PASSWORD" \
+            -f scripts/01_roles_and_grants.sql
+          PGPASSWORD="$PG_MIGRATOR_PASSWORD" psql -h 127.0.0.1 -U app_migrator -d agentsystem \
+            -v ON_ERROR_STOP=1 -f scripts/02_grants_in_agentsystem.sql
+
+      - name: 迁移与防篡改层
+        env:
+          PGPASSWORD: ci-postgres-pw
+        run: |
+          uv run alembic upgrade head
+          # 事件触发器要超级用户建，故与迁移分开（见 P1.3.4）
+          psql -h 127.0.0.1 -U postgres -d agentsystem -v ON_ERROR_STOP=1 \
+            -f scripts/03_audit_event_trigger.sql
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: pytest
+        run: uv run pytest -q -rs
+
+      - name: 断言无用例被跳过
+        # skip 不是 pass。缺环境变量导致的静默跳过会让 CI 变成摆设 ——
+        # 身份与审计用例一旦被跳过，两条红线就没有任何机械保障了。
+        run: |
+          out="$(uv run pytest -q -rs 2>&1)"
+          echo "$out" | tail -3
+          if echo "$out" | grep -qE "[0-9]+ skipped"; then
+            echo "❌ 存在被跳过的用例，视为失败"; exit 1
+          fi
