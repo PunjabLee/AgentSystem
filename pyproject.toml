@@ -1,0 +1,57 @@
+[project]
+name = "agentsystem"
+version = "0.1.0"
+description = "企业级 AI 应用落地 PoC —— 订单全生命周期智能问答与任务执行系统"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.0",
+    "uvicorn[standard]>=0.52.0",
+    "sse-starlette>=3.4.0",
+    "pydantic>=2.13.0",
+    "pydantic-settings>=2.7.0",
+    "pyyaml>=6.0",
+    # 业务侧数据库驱动。checkpointer 另用 psycopg3（见下），项目有两个 PG 驱动
+    "asyncpg==0.31.0",
+    "sqlalchemy>=2.0.52",
+    "alembic>=1.19.0",
+    # langgraph-checkpoint-postgres 依赖 psycopg>=3.2，非 asyncpg
+    "psycopg[binary,pool]>=3.3.4",
+    "httpx>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# D = pydocstyle —— 宪法第十一条「代码必须自带注释」的机械落地物
+select = ["E", "F", "I", "UP", "B", "D"]
+ignore = [
+    "D203",  # 与 D211 冲突，二选一
+    "D213",  # 与 D212 冲突，二选一
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]              # 测试用例名即文档，不强制 docstring
+"src/agentsystem/db/migrations/versions/*" = ["D"]  # Alembic 自动生成
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentsystem"]
