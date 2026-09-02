@@ -1,0 +1,71 @@
+# 五档模型定义（P1 详细设计 §2.1）。
+#
+# 🔴 api_key 一律写 ${ENV_VAR} 占位，绝不出现明文 —— 本文件被 git 跟踪，
+#    宪法第七条针对 .env 的检查拦不住写进被跟踪文件的密钥。加载时校验：
+#    值若不以 "${" 开头且非 null，直接拒绝启动。
+#
+# 各档 thinking 开关的形状**互不通用**，差异全部收敛在 extra_body 段。
+# gateway.py 里不含任何 `if tier == "M3"` 分支，新增档位只改本文件。
+
+default_tier: M4
+
+tiers:
+  M0:
+    name: "本机 Ollama"
+    base_url: "http://127.0.0.1:11434/v1"
+    model: "poc-chat"                    # Modelfile 固化 num_ctx=8192（P1.1.4）
+    api_key: null                        # Ollama 不需要鉴权
+    role: dev                            # dev 档不进对比结论
+    max_tokens_floor: 800
+    # ⚠️ 空 extra_body 不是漏配。OpenAI 兼容端点 /v1 关不掉 thinking，
+    #    四种方式实测全败（请求体 think:false 静默忽略、Modelfile
+    #    PARAMETER think 报未知参数、SYSTEM /no_think 无效、用户消息加
+    #    /no_think 无效，判据 completion<60，实测 357–411 tok）。
+    #    2026-08-30 用户拍板：M0 保留 thinking，换取统一走 OpenAI 兼容接口。
+    #    连带约束：max_tokens_floor ≥ 800 —— 实测 max_tokens=80 时 thinking
+    #    吃光预算，finish_reason=length 且 content 为空。
+    extra_body: {}
+
+  M1:
+    name: "AutoDL 5090 自建"
+    base_url: "http://127.0.0.1:18001/v1"   # SSH 隧道
+    model: "Qwen3.8-27B-NVFP4"
+    api_key: "${AUTODL_VLLM_API_KEY}"       # vLLM 若开鉴权
+    role: benchmark
+    max_tokens_floor: 512
+    extra_body:
+      chat_template_kwargs: { enable_thinking: false }
+
+  M2:
+    name: "AutoDL A100 自建"
+    base_url: "http://127.0.0.1:18002/v1"
+    model: "Qwen3.8-27B"
+    api_key: "${AUTODL_VLLM_API_KEY}"
+    role: benchmark
+    max_tokens_floor: 512
+    extra_body:
+      chat_template_kwargs: { enable_thinking: false }
+
+  M3:
+    name: "AutoDL.Art 托管"
+    base_url: "https://www.autodl.art/api/v1"
+    model: "Qwen3.5-397B-A17B"
+    api_key: "${AUTODL_ART_API_KEY}"
+    role: benchmark
+    max_tokens_floor: 512
+    # ✅ P0 实测：顶层 enable_thinking:false 使思考 1193 → 37 tok
+    extra_body: { enable_thinking: false }
+
+  M4:
+    name: "DeepSeek 官方"
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-v4-flash"
+    api_key: "${DEEPSEEK_API_KEY}"
+    role: benchmark
+    max_tokens_floor: 512
+    # ✅ P0 实测：thinking.type=disabled 使 110 → 47 tok。
+    #    ⚠️ 顶层 enable_thinking 对 DeepSeek 无效，与 M3 完全不通用。
+    extra_body: { thinking: { type: disabled } }
+
+# 不可达时依次回落。M0 不参与 —— 它是 dev 档，回落到它会让对比结论被污染。
+fallback_chain: [M1, M2, M3]

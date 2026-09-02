@@ -164,6 +164,16 @@ class LLMResult:
 | M3 AutoDL.Art | 顶层 `enable_thinking: false` | ✅ 实测 |
 | M4 DeepSeek | `thinking.type = disabled` | ✅ 实测 |
 
+**2026-09-02 A/B 复验**（同一问题，唯一变量是 `extra_body` 的开关）：
+
+| 档 | 关闭 thinking | 不设开关 | 倍数 |
+|---|---|---|---|
+| M3 | completion = **40** tok | 2452 tok | **61×** |
+| M4 | completion = **37** tok | 98 tok | 2.6× |
+
+M3 的差距说明这不是可省的优化项：不关 thinking，单次问答的输出 token 是
+关闭时的 61 倍，直接决定采购档的成本结论。
+
 ### 2.4 降级链
 
 ```
