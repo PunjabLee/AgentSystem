@@ -4,6 +4,7 @@
 是数据库自身的权限与触发器行为，用 mock 验证等于什么都没验证。
 """
 
+import pathlib
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -15,6 +16,26 @@ from agentsystem.settings import get_settings
 # 探针写入用的固定 trace_id。审计表不可删，这些行会永久留存 —— 这是
 # append-only 的正确行为，不是泄漏。用固定前缀便于人工辨识。
 PROBE_TRACE_ID = "p134-tamper-probe"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _load_dotenv() -> None:
+    """把 .env 灌进 os.environ。
+
+    pydantic-settings 只把 .env 映射到已声明的 Settings 字段，演示令牌
+    （DEMO_TOKEN_*）不是配置项、不该进 Settings，故测试自行读取。
+    已存在的环境变量优先，便于 CI 覆盖。
+    """
+    import os
+
+    env = pathlib.Path(".env")
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip())
 
 
 def _engine(role: str) -> Engine:

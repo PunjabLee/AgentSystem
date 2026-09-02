@@ -1,0 +1,32 @@
+# 静态 Bearer 身份表（P1 详细设计 §2.5.1）。
+#
+# 只存 SHA-256，绝不存明文 —— 明文令牌走 .env（宪法第七条）。
+# 本文件与 P2 §5.2 的权限配置是同一份：身份与授权范围必须同源，
+# 分成两份配置就会漂移，而漂移的那一次就是越权。
+#
+# bu_codes 不支持通配符：事业部边界必须逐个列举，避免一次配置疏忽
+# 就打通三个事业部。regions 允许 "*" 表示不限。
+#
+# 本文件由 scripts/mint_user_tokens.py 生成，勿手工编辑。
+
+users:
+  - user_id: u_yr_01
+    name: 印染销售
+    token_sha256: "51a4a714cfb617a34a5951ca15fdc00b83b41b929cb73437de2acb402969ea38"
+    bu_codes: ["BU-A"]
+    regions: ["华东", "华南"]
+  - user_id: u_tile_01
+    name: 瓷砖销售
+    token_sha256: "268a8edbfc5e81077a0a22770df13c80e6c78c3e0b30bff122b9d6f15c387bd4"
+    bu_codes: ["BU-B"]
+    regions: ["华东"]
+  - user_id: u_tile_mgr
+    name: 瓷砖业务主管
+    token_sha256: "6409cf1dd73a806b61fb2d152ed5a6ac5856876a108357ed4ba23922ba55c477"
+    bu_codes: ["BU-B"]
+    regions: ["*"]
+  - user_id: u_group_01
+    name: 集团运营
+    token_sha256: "72f92ad3c54bb338a69e57b1978c67e8d2d3acae54263e6c0efc48ba7bcc33fc"
+    bu_codes: ["BU-A", "BU-B", "BU-C"]
+    regions: ["*"]

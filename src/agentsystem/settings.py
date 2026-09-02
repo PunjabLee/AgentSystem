@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     pg_ro_user: str = "app_ro"
     pg_ro_password: str = Field(default="")
 
+    # session_id 的 HMAC 派生密钥（P1 详细设计 §2.5.3）。泄漏即可伪造
+    # 任意用户的 session_id，进而消费他人的 write_intent —— 与数据库口令同级。
+    session_signing_key: str = Field(default="")
+
     def dsn(self, role: str = "app", *, driver: str = "asyncpg") -> str:
         """构造数据库连接串。
 
