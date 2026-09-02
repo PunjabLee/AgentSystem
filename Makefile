@@ -4,7 +4,7 @@
 # 比没有 make backup 危险得多。
 
 .PHONY: help chat test lint fmt check migrate migrate-audit mint-tokens \
-        audit-tail dev backup restore-drill p1-exit
+        audit-tail ollama-models dev backup restore-drill p1-exit
 
 help:  ## 列出可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -38,6 +38,11 @@ mint-tokens:  ## 幂等铸造演示用户令牌（明文进 .env，哈希进 use
 chat:  ## 模型冒烟；TIER=M4 可指定单档，缺省跑全部可用档
 	uv run python scripts/chat.py $(if $(TIER),--tier $(TIER),)
 
+ollama-models:  ## 从 ollama/*.Modelfile 重建 M0 的两个本地模型
+	ollama create poc-chat  -f ollama/poc-chat.Modelfile
+	ollama create poc-embed -f ollama/poc-embed.Modelfile
+	@ollama list | grep -E '^poc-'
+
 # ── 审计 ──────────────────────────────────────────────────────
 N ?= 20
 audit-tail:  ## 尾随最近 N 条审计，按 trace_id 分组显示 attempt/outcome 配对
@@ -50,15 +55,17 @@ audit-tail:  ## 尾随最近 N 条审计，按 trace_id 分组显示 attempt/out
 	    FROM (SELECT * FROM audit_log ORDER BY id DESC LIMIT $(N)) t \
 	   GROUP BY trace_id ORDER BY max(id) DESC;"
 
-# ── 尚未实现（P1.5 / P2）──────────────────────────────────────
+# ── 备份与恢复 ────────────────────────────────────────────────
+backup:  ## 四件套备份：两库 + 集群角色 + Dify storage
+	bash scripts/backup.sh
+
+restore-drill:  ## 恢复到干净容器并比对行数与三层防护（判据 3）
+	bash scripts/restore_drill.sh
+
+# ── 出口判据 ──────────────────────────────────────────────────
+p1-exit:  ## 依次执行判据 1/2/3，输出 PASS/FAIL
+	@bash scripts/p1_exit.sh
+
+# ── 尚未实现 ──────────────────────────────────────────────────
 dev:
 	@echo "❌ make dev 待 P2.3.1 的 FastAPI 骨架落地后实现" && exit 1
-
-backup:
-	@echo "❌ make backup 属 P1.5.2，尚未实现" && exit 1
-
-restore-drill:
-	@echo "❌ make restore-drill 属 P1.5.3，尚未实现" && exit 1
-
-p1-exit:
-	@echo "❌ make p1-exit 属 P1.6，待判据 2/3 的实现落地后接线" && exit 1

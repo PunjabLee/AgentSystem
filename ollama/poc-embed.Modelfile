@@ -1,0 +1,10 @@
+# M0 的向量模型（P1.1.4）。
+#
+# num_ctx 2048 足够覆盖切块后的文档片段，再大只是白占常驻内存 ——
+# 与 poc-chat 同机运行时这一项直接决定两者能否共存。
+#
+# 重建：make ollama-models
+
+FROM qwen3-embedding:0.6b
+
+PARAMETER num_ctx 2048

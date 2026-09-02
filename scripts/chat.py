@@ -8,6 +8,7 @@
 
 import argparse
 import asyncio
+import json
 import os
 import pathlib
 import sys
@@ -44,8 +45,20 @@ async def probe(gateway: LLMGateway, tier: str) -> bool:
         print(f"  ❌ 调用失败: {type(exc).__name__}: {exc}")
         return False
 
-    can_reply = bool(result.content) or bool(result.tool_calls)
-    has_tool_calls = bool(result.tool_calls)
+    # 判据 1 的三个合取项（WBS P1 出口判据，2026-08-31 改为可证伪形式）：
+    #   finish_reason == "tool_calls" ∧ 首个调用命中 stub ∧ arguments 可 JSON 解析
+    # 「能回话」这类无阈值说法此前正是被评审打回的写法，故逐项机械判定。
+    finish_ok = result.finish_reason == "tool_calls"
+    first = result.tool_calls[0] if result.tool_calls else None
+    name_ok = first is not None and first.name == QUERY_INVENTORY_STUB.name
+    args_ok = False
+    parsed: object = None
+    if first is not None:
+        try:
+            parsed = json.loads(first.arguments)
+            args_ok = isinstance(parsed, dict)
+        except json.JSONDecodeError:
+            args_ok = False
 
     print(
         f"  实际档位  : {result.tier_used}"
@@ -54,13 +67,12 @@ async def probe(gateway: LLMGateway, tier: str) -> bool:
     print(f"  finish    : {result.finish_reason}")
     print(f"  延迟      : {result.latency_ms} ms")
     print(f"  token     : prompt={result.prompt_tokens} completion={result.completion_tokens}")
-    print(f"  {'✅' if can_reply else '❌'} 能回话")
-    if has_tool_calls:
-        for tc in result.tool_calls:
-            print(f"  ✅ tool_calls: {tc.name}({tc.arguments})")
-    else:
-        print(f"  ❌ 无 tool_calls；content={(result.content or '')[:80]!r}")
-    return can_reply and has_tool_calls
+    print(f"  {'✅' if finish_ok else '❌'} finish_reason == tool_calls")
+    print(f"  {'✅' if name_ok else '❌'} 首个调用命中 stub（{QUERY_INVENTORY_STUB.name}）")
+    print(f"  {'✅' if args_ok else '❌'} arguments 可 JSON 解析 → {parsed!r}")
+    if not result.tool_calls:
+        print(f"     content={(result.content or '')[:100]!r}")
+    return finish_ok and name_ok and args_ok
 
 
 async def main() -> int:

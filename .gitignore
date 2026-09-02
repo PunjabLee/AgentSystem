@@ -50,3 +50,6 @@ Thumbs.db
 .idea/
 .vscode/
 !.vscode/extensions.json
+
+# 备份产物（含角色口令哈希，绝不入库）
+backups/

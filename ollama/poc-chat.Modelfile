@@ -1,0 +1,21 @@
+# M0 的对话模型（P1.1.4）。
+#
+# 固化 num_ctx 的理由是实测的内存问题：默认上下文让 qwen3:8b 常驻
+# 11 GB、embedding 常驻 5.8 GB，两者无法共存，P0 阶段一度不得不错峰使用。
+# 固化后降至 6.6 GB / 2.1 GB，错峰约束取消。
+#
+# 采样参数取 Qwen3 官方推荐（temperature 0.6 / top_p 0.95 / top_k 20），
+# 与基座默认一致，写在这里是为了让配置显式可见 —— 换台机器重建时不必
+# 去猜当初用的是什么。
+#
+# 重建：make ollama-models
+
+FROM qwen3:8b
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER repeat_penalty 1
+PARAMETER stop <|im_start|>
+PARAMETER stop <|im_end|>
