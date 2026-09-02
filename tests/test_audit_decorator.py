@@ -208,3 +208,64 @@ async def test_unexpected_exception_is_recorded_as_failed(ctx: RequestContext) -
     rows = await _rows(ctx.trace_id)
     assert rows[0].status == "failed"
     assert rows[0].error_code == "RuntimeError"
+
+
+async def test_metrics_records_actual_tier_not_requested(ctx: RequestContext) -> None:
+    """🔴 model_tier 必须记**实际使用的档**，不是请求的档。
+
+    发生降级时两者不同。若记请求档，P3 的「M3 vs M4」对比会把一批实际由
+    M3 产生的数据算到 M4 头上 —— 结论作废，且无从事后察觉。
+    """
+    from agentsystem.audit import metrics_from_llm_result
+    from agentsystem.audit.writer import write_outcome
+    from agentsystem.llm.types import LLMResult
+
+    result = LLMResult(
+        content="ok",
+        finish_reason="stop",
+        tier_used="M3",
+        degraded_from="M4",  # 请求的是 M4，实际落到 M3
+        latency_ms=1200,
+        ttft_ms=340,
+        prompt_tokens=396,
+        completion_tokens=96,
+    )
+    metrics = metrics_from_llm_result(result)
+    assert metrics["model_tier"] == "M3", "记的应是实际档"
+
+    await write_outcome(ctx, action_type="read", source="langgraph", status="success", **metrics)
+    rows = await _rows(ctx.trace_id)
+    assert len(rows) == 1
+
+
+async def test_llm_metrics_land_in_audit_row(ctx: RequestContext) -> None:
+    """P1.2.4：埋点必须真落进审计表，采到了落不了库等于没采。"""
+    from agentsystem.audit.writer import write_outcome
+
+    await write_outcome(
+        ctx,
+        action_type="read",
+        source="langgraph",
+        status="success",
+        model_tier="M4",
+        ttft_ms=331,
+        prompt_tokens=396,
+        completion_tokens=96,
+        latency_ms=768,
+    )
+    async with get_app_sessionmaker()() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT model_tier, ttft_ms, prompt_tokens, completion_tokens, latency_ms "
+                    "FROM audit_log WHERE trace_id = :t"
+                ),
+                {"t": ctx.trace_id},
+            )
+        ).one()
+    assert (row.model_tier, row.ttft_ms, row.prompt_tokens, row.completion_tokens) == (
+        "M4",
+        331,
+        396,
+        96,
+    )
