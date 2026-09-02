@@ -88,8 +88,8 @@ async def main() -> int:
             print(f"   {tier}: {reason}")
 
     tiers = [args.tier] if args.tier else config.available_tiers
-    gateway = LLMGateway(config)
-    results = {t: await probe(gateway, t) for t in tiers}
+    async with LLMGateway(config) as gateway:
+        results = {t: await probe(gateway, t) for t in tiers}
 
     print(f"\n{'═' * 62}\n汇总")
     for tier, ok in results.items():

@@ -56,6 +56,27 @@ class LLMGateway:
             )
         return self._clients[cfg.tier]
 
+    async def aclose(self) -> None:
+        """关闭全部档位的客户端。
+
+        与 ``db.session.dispose_engines`` 同类：凡是自己建了池子的模块，
+        都要提供关闭入口。P3 的评测脚本会长跑，不能靠 GC 兜底。
+
+        （注：解释器收尾时 httpcore2 打的那条 athrow 回溯与本方法无关，
+        调用 ``aclose`` 也不会消除，实测非泄漏 —— 见 ``_call_streaming``。）
+        """
+        for client in self._clients.values():
+            await client.close()
+        self._clients.clear()
+
+    async def __aenter__(self) -> LLMGateway:
+        """支持 ``async with LLMGateway() as gw:``。"""
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """退出时关闭客户端。"""
+        await self.aclose()
+
     def _chain_for(self, tier: str) -> list[str]:
         """算出从 ``tier`` 开始的实际尝试顺序。
 
@@ -77,6 +98,7 @@ class LLMGateway:
         tools: list[ToolDef] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.0,
+        stream: bool = False,
     ) -> LLMResult:
         """发起一次对话调用，必要时沿降级链回落。
 
@@ -86,6 +108,10 @@ class LLMGateway:
             tools: 工具定义；None 表示本次不带工具。
             max_tokens: 上限；低于该档 ``max_tokens_floor`` 时自动抬升。
             temperature: 采样温度，评测默认 0。
+            stream: 是否走流式。**TTFT 只有流式才测得到** —— 非流式下
+                服务端把整个响应一次性返回，首 token 时刻在客户端不可观测，
+                此时 ``ttft_ms`` 为 None 而非 0（0 是"测到了且为零"，
+                语义完全不同）。
 
         Returns:
             调用结果。发生回落时 ``tier_used`` 与 ``degraded_from`` 不同。
@@ -106,7 +132,9 @@ class LLMGateway:
         for candidate in chain:
             cfg = self._config.tiers[candidate]
             try:
-                result = await self._call_once(cfg, messages, tools, max_tokens, temperature)
+                result = await self._call_once(
+                    cfg, messages, tools, max_tokens, temperature, stream
+                )
             except (APIConnectionError, APITimeoutError, httpx.TransportError) as exc:
                 # 连不上或超时 —— 换一档有意义。
                 failures[candidate] = f"{type(exc).__name__}: {exc}"
@@ -134,6 +162,7 @@ class LLMGateway:
         tools: list[ToolDef] | None,
         max_tokens: int | None,
         temperature: float,
+        stream: bool = False,
     ) -> LLMResult:
         """向单一档位发起一次调用，不含降级逻辑。"""
         # 低于地板值会让 thinking 吃光预算、content 为空（M0 实测 max_tokens=80
@@ -153,6 +182,9 @@ class LLMGateway:
             # 档位差异的唯一注入点。
             payload["extra_body"] = dict(cfg.extra_body)
 
+        if stream:
+            return await self._call_streaming(cfg, payload)
+
         started = time.perf_counter()
         response = await self._client(cfg).chat.completions.create(**payload)
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -170,6 +202,75 @@ class LLMGateway:
             latency_ms=latency_ms,
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
+        )
+
+    async def _call_streaming(self, cfg: TierConfig, payload: dict[str, Any]) -> LLMResult:
+        """流式调用，顺带测出 TTFT。
+
+        TTFT 的定义取「**第一个带内容的 delta**」而非第一个 chunk：多数厂商
+        的首个 chunk 只带 role 字段、不含文本，按它计时会系统性低估。开着
+        thinking 的档位尤其明显 —— 思考期间也在出 chunk，但用户一个字都没看到。
+
+        ``stream_options.include_usage`` 让服务端在末尾补一个带 usage 的
+        chunk。不加这一项，流式下拿不到 token 计量，而 P1.2.4 要把它喂给审计。
+        """
+        payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+        started = time.perf_counter()
+        ttft_ms: int | None = None
+        chunks: list[str] = []
+        finish_reason = "stop"
+        tool_fragments: dict[int, dict[str, str]] = {}
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+
+        # 用 async with 显式关闭流。
+        #
+        # ⚠️ 即便如此，httpcore2 2.12 + Python 3.14 仍会在生成器清理阶段往
+        #    stderr 打一条 "generator didn't stop after athrow()" 回溯。
+        #    **实测确认是噪音，不是泄漏**：连发 8 次流式调用，连接池中的
+        #    连接数始终为 0，无累积。结果内容、token 计量、tool_calls 均正确。
+        #    记在这里是为了让后来者不必再查一遍 —— 它看起来很像资源泄漏。
+        raw = await self._client(cfg).chat.completions.create(**payload)
+        async with raw as stream:
+            async for chunk in stream:
+                if chunk.usage is not None:
+                    prompt_tokens = chunk.usage.prompt_tokens
+                    completion_tokens = chunk.usage.completion_tokens
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
+                if delta is None:
+                    continue
+                if delta.content:
+                    if ttft_ms is None:
+                        ttft_ms = int((time.perf_counter() - started) * 1000)
+                    chunks.append(delta.content)
+                for tc in delta.tool_calls or []:
+                    # 工具调用的 arguments 按片到达，必须按 index 累积后再拼。
+                    # 单独一片通常不是合法 JSON，中途解析必失败。
+                    slot = tool_fragments.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        slot["name"] = tc.function.name
+                    if tc.function and tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+
+        return LLMResult(
+            content="".join(chunks) or None,
+            finish_reason=finish_reason,
+            tier_used=cfg.tier,
+            tool_calls=[
+                ToolCall(id=f["id"], name=f["name"], arguments=f["args"])
+                for _, f in sorted(tool_fragments.items())
+            ],
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            ttft_ms=ttft_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
 

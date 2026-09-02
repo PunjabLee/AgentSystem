@@ -69,13 +69,17 @@ make p1-exit
 （`scripts/04_database_isolation.sql`）。这一步堵的是绕过审计防护最省事的
 路径：不必拆触发器，换个能连库的角色登录即可。
 
-### ⚠️ 未完成项：Dify 仍以 postgres（超级用户）连库
+### ⚠️ 已接受的风险：Dify 仍以 postgres（超级用户）连库
 
 **超级用户绕过一切 ACL。** 只要 Dify 用 `postgres`，任何能拿到它数据库凭据
 的路径都能对 `agentsystem` 执行 `DROP EVENT TRIGGER` 后随意改写 `audit_log`
 —— P1.3.4 的三层防护对它完全无效，`scripts/04` 只关掉了非超级用户那条路径。
 
-切换需停机，步骤：
+> **2026-09-03 决策：PoC 阶段接受现状，不切换。** 理由与边界见
+> [宪法 附注 A.1](CONSTITUTION.md)。**规模化落地前必须执行下述切换** ——
+> 在那之前，任何声称「审计日志不可篡改」的对外表述都须带上这条限定。
+
+切换步骤（待执行）：
 
 ```bash
 # ① 停 Dify

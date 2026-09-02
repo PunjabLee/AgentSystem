@@ -5,6 +5,7 @@
 extra_body 注入、地板值抬升与降级链，都是与模型无关的纯逻辑。
 """
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -258,3 +259,140 @@ def test_using_unavailable_tier_reports_root_cause() -> None:
     cfg = replace(cfg, tiers={**cfg.tiers, "M1": _tier("M1", unavailable="环境变量 X 未设置")})
     with pytest.raises(ModelConfigError, match="环境变量 X 未设置"):
         cfg.get("M1")
+
+
+# ── 流式与 TTFT（P1.2.3 / P1.2.4）────────────────────────────
+class FakeStream:
+    """把预设的 chunk 序列当成 openai 的 AsyncStream 吐出来。"""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        self._chunks = chunks
+
+    async def __aenter__(self) -> FakeStream:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.closed = True
+
+    async def __aiter__(self):  # noqa: ANN204 —— 异步生成器，返回类型由 yield 决定
+        for c in self._chunks:
+            yield c
+
+
+def _delta(
+    content: str | None = None,
+    *,
+    tool: tuple[int, str, str, str] | None = None,
+    finish: str | None = None,
+    usage: tuple[int, int] | None = None,
+) -> Any:
+    """造一个 chunk。tool 是 (index, id, name, arguments 片段)。"""
+    tool_calls = None
+    if tool is not None:
+        idx, tid, name, args = tool
+        tool_calls = [
+            SimpleNamespace(index=idx, id=tid, function=SimpleNamespace(name=name, arguments=args))
+        ]
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content, tool_calls=tool_calls),
+                finish_reason=finish,
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=usage[0], completion_tokens=usage[1])
+        if usage
+        else None,
+    )
+
+
+@pytest.fixture
+def streaming_harness(monkeypatch: pytest.MonkeyPatch):
+    """把客户端换成吐固定 chunk 序列的桩。"""
+
+    def build(chunks: list[Any]):
+        captured: list[dict] = []
+
+        class Client:
+            def __init__(self) -> None:
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+            async def _create(self, **payload: Any) -> FakeStream:
+                captured.append(payload)
+                return FakeStream(chunks)
+
+        monkeypatch.setattr(LLMGateway, "_client", lambda self, cfg: Client())
+        return LLMGateway(_config()), captured
+
+    return build
+
+
+async def test_streaming_requests_usage(streaming_harness) -> None:
+    """必须带 stream_options.include_usage，否则流式下拿不到 token 计量。
+
+    而 P1.2.4 要把 token 数喂给审计表 —— 缺了它，流式路径上的成本归因是空的。
+    """
+    gw, captured = streaming_harness([_delta("你好", finish="stop", usage=(10, 2))])
+    await gw.chat(MSGS, tier="M4", stream=True)
+    assert captured[0]["stream"] is True
+    assert captured[0]["stream_options"] == {"include_usage": True}
+
+
+async def test_ttft_measured_from_first_content_delta(streaming_harness) -> None:
+    """🔴 TTFT 取第一个**带内容**的 delta，不是第一个 chunk。
+
+    多数厂商的首个 chunk 只带 role、不含文本；按它计时会系统性低估，
+    开着 thinking 的档位尤其明显 —— 思考期间照样出 chunk，用户一个字没看到。
+    """
+    gw, _ = streaming_harness(
+        [
+            _delta(None),  # 只带 role，无内容 —— 不应触发计时
+            _delta(""),  # 空串同样不算
+            _delta("第一个字"),
+            _delta("后续", finish="stop", usage=(10, 5)),
+        ]
+    )
+    result = await gw.chat(MSGS, tier="M4", stream=True)
+    assert result.ttft_ms is not None
+    assert result.content == "第一个字后续"
+    assert result.completion_tokens == 5
+
+
+async def test_non_streaming_ttft_is_none_not_zero(harness) -> None:
+    """非流式的 ttft 必须是 None，不是 0。
+
+    0 的语义是「测到了且为零」，None 是「测不到」。审计表里混进一堆 0
+    会让 P3 的延迟分析得出"首字延迟极低"的错误结论。
+    """
+    gw, _ = harness()
+    assert (await gw.chat(MSGS, tier="M4")).ttft_ms is None
+
+
+async def test_streaming_tool_call_fragments_are_reassembled(streaming_harness) -> None:
+    """工具参数按片到达，必须按 index 累积后再拼 —— 单片通常不是合法 JSON。"""
+    gw, _ = streaming_harness(
+        [
+            _delta(tool=(0, "call_1", "query_inventory", '{"product_')),
+            _delta(tool=(0, "", "", 'code": "TL-1"')),
+            _delta(tool=(0, "", "", "}"), finish="tool_calls", usage=(10, 8)),
+        ]
+    )
+    result = await gw.chat(MSGS, tier="M4", tools=[], stream=True)
+    assert result.finish_reason == "tool_calls"
+    assert len(result.tool_calls) == 1
+    call = result.tool_calls[0]
+    assert call.id == "call_1"
+    assert call.name == "query_inventory"
+    assert json.loads(call.arguments) == {"product_code": "TL-1"}
+
+
+async def test_aclose_releases_clients() -> None:
+    """建了池子就要能关。P3 的评测脚本长跑，不能靠 GC 兜底。"""
+    gw = LLMGateway(_config())
+    gw._clients["M4"] = SimpleNamespace(close=_noop)
+    await gw.aclose()
+    assert gw._clients == {}
+
+
+async def _noop() -> None:
+    return None

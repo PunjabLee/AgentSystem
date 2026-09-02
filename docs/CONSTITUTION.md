@@ -181,3 +181,41 @@
 **注释要写「为什么」，不要写「是什么」。** `i += 1  # i 加一` 是噪声；`i += 1  # 跳过 BOM 头，UTF-8 文件首字符不参与解析` 才有价值。代码本身已经说明做了什么，注释的职责是补上代码说不出来的意图与约束。
 
 **如何验证**：CI 启用 `ruff` 的 `pydocstyle`（`D`）规则集，缺失 docstring 即失败。`# noqa: D` 抑制必须在同一行给出理由，否则视同违规——无理由的批量抑制等于取消本条。
+
+---
+
+## 附注 A · 已接受的风险
+
+本节记录**明知而刻意不做**的事项。写在这里的目的是让它们不必在每次评审
+重新讨论一遍 —— 未记录的遗漏和已决策的取舍，处理方式完全不同。
+
+### A.1 Dify 以超级用户连接数据库（2026-09-03 用户决策：接受现状）
+
+**事实**：Dify 以 `postgres`（superuser）连接同集群的 PostgreSQL。
+超级用户绕过一切 ACL，因此它可以：
+
+- 连接 `agentsystem` 库（尽管已 `REVOKE ALL ... FROM PUBLIC`）
+- `DROP EVENT TRIGGER trg_guard_audit_ddl`，进而 `DISABLE TRIGGER`，
+  再任意 `UPDATE` / `DELETE` / `TRUNCATE` `audit_log`
+
+**这意味着第一条的防护范围有个明确边界**：三层防篡改防住的是
+「应用自身的错误或被诱导的写入」与「运行时账号被滥用」，**防不住
+「持有 Dify 数据库凭据的人」**。P1.3.4 §3.4 的威胁模型实测结论应连同
+本条一起读。
+
+**已做的部分**（`scripts/04_database_isolation.sql`）：
+建了第四个角色 `dify_owner`（NOSUPERUSER），`agentsystem` 收回了 PUBLIC 的
+CONNECT 并逐个显式授予。这关掉了**非超级用户**那条路径，有回归断言
+（`tests/test_db_isolation.py`）。
+
+**未做的部分**：把 Dify 从 `postgres` 切到 `dify_owner`。脚本已备好
+（`scripts/05_switch_dify_to_dify_owner.sql`），需停机并转移 145 + 13 张表
+的属主。
+
+**接受的理由**：PoC 阶段 Dify 与本系统同机、同一运维人、凭据不外发，
+「Dify 凭据泄漏」不在本期威胁模型内。切换要停正在使用的 Dify 且涉及
+大批对象属主变更，收益与风险不成比例。
+
+**规模化落地前必须做**：执行 `scripts/05`，并把 `tests/test_db_isolation.py`
+补一条「Dify 使用的角色非 superuser」的断言。在那之前，任何声称
+「审计日志不可篡改」的对外表述都必须带上本条限定。
