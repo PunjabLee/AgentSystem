@@ -75,6 +75,12 @@ async def probe(gateway: LLMGateway, tier: str) -> bool:
     return finish_ok and name_ok and args_ok
 
 
+#: 判据 1 点名的三档。M1/M2 依赖 D1（AutoDL 实例）尚未到位，判据原文已将其排除；
+#: M0 走本机 Ollama，M3/M4 走厂商 API。写成常量而非从配置推导 —— 判据的范围
+#: 不能由「当前恰好有哪些密钥」决定。
+REQUIRED_TIERS = ("M0", "M3", "M4")
+
+
 async def main() -> int:
     """按参数跑一档或全部可用档。"""
     parser = argparse.ArgumentParser(description="P1 模型冒烟")
@@ -87,13 +93,32 @@ async def main() -> int:
         for tier, reason in config.unavailable_tiers.items():
             print(f"   {tier}: {reason}")
 
-    tiers = [args.tier] if args.tier else config.available_tiers
+    if args.tier:
+        # 单档模式：开发时探某一档用，不承担判据职责。
+        tiers = [args.tier]
+    else:
+        # 判据模式：判据 1 的原文是「**三档** tool_calls」，所以三档缺一即为不通过。
+        #
+        # 🔴 这里必须显式核对档位清单，不能只跑 available_tiers 然后看 all()：
+        #    available_tiers 会把密钥缺失的档**静默排除**，而 all() 对缩水后的
+        #    集合乃至空集合都返回 True —— 于是 M3 密钥一过期，判据就只跑 M0+M4
+        #    却照样报 PASS。已实测复现：抹掉 AUTODL_ART_API_KEY 后退出码为 0。
+        missing = [t for t in REQUIRED_TIERS if t not in config.available_tiers]
+        if missing:
+            print(f"\n❌ 判据 1 要求的档位不可用: {', '.join(missing)}")
+            for t in missing:
+                print(f"   {t}: {config.unavailable_tiers.get(t, '未在配置中')}")
+            print("   —— 判据 1 不通过。缺档不等于免测。")
+            return 1
+        tiers = list(REQUIRED_TIERS)
+
     async with LLMGateway(config) as gateway:
         results = {t: await probe(gateway, t) for t in tiers}
 
     print(f"\n{'═' * 62}\n汇总")
     for tier, ok in results.items():
         print(f"  {'✅' if ok else '❌'} {tier}  {config.tiers[tier].name}")
+    # results 恒非空（单档模式至少一项，判据模式已核对三档齐备），all() 无空集陷阱。
     return 0 if all(results.values()) else 1
 
 

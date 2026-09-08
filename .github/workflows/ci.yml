@@ -96,8 +96,13 @@ jobs:
         # skip 不是 pass。缺环境变量导致的静默跳过会让 CI 变成摆设 ——
         # 身份与审计用例一旦被跳过，两条红线就没有任何机械保障了。
         run: |
-          out="$(uv run pytest -q -rs 2>&1)"
-          echo "$out" | tail -3
-          if echo "$out" | grep -qE "[0-9]+ skipped"; then
+          out="$(uv run pytest -rs 2>&1)"
+          echo "$out" | tail -5
+          # 🔴 按 -rs 输出的大写 SKIPPED 匹配，不要按「N skipped」统计行匹配。
+          #    pyproject 的 addopts 已含 -q，命令行再传一个就成了 -qq，而 -qq
+          #    会把统计行整个抑制掉 —— 模式永远匹配不上，这道闸门静默失效。
+          #    本处与 p1_exit.sh 最初都写错成了 [0-9]+ skipped，且因 CI 从未
+          #    运行过而一直没暴露。已用变异验证（给点名用例加 skip 标记）确认现在能抓到。
+          if echo "$out" | grep -q "^SKIPPED"; then
             echo "❌ 存在被跳过的用例，视为失败"; exit 1
           fi

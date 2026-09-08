@@ -35,10 +35,23 @@ uv run ruff check . >/dev/null 2>&1 && LINT_OK=1
 uv run ruff format --check . >/dev/null 2>&1 && FMT_OK=1
 uv run pytest -q >/dev/null 2>&1 && TESTS_OK=1
 for t in "${REQUIRED[@]}"; do
-  if uv run pytest "$t" -q >/dev/null 2>&1; then
-    echo "  ✅ $t"
-  else
+  # 🔴 不能只看退出码：pytest 对被 skip 的用例返回 0，与「真跑过且通过」
+  #    不可区分。已实测：一个 `assert False` 的用例加上 @pytest.mark.skip
+  #    之后，`pytest -q` 退出码仍为 0。
+  #    缺环境变量导致的静默跳过会让点名检查彻底失效 —— 而这两个用例是
+  #    P1 两条核心设计的唯一实证。ci.yml 早有同样的校验，这里补齐对齐。
+  out=$(uv run pytest "$t" -rs 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ]; then
     echo "  ❌ $t —— 缺失或未通过"; NAMED_OK=0
+  # 🔴 按 -rs 输出的大写 SKIPPED 匹配，不要按「N skipped」统计行匹配：
+  #    pyproject 的 addopts 已含 -q，命令行再传一个就成了 -qq，而 -qq
+  #    会把统计行整个抑制掉 —— 模式永远匹配不上，检查静默失效。
+  #    实测踩过：本处与 ci.yml 最初都写成了 [0-9]+ skipped。
+  elif echo "$out" | grep -q "^SKIPPED"; then
+    echo "  ❌ $t —— 被跳过。skip 不是 pass"; NAMED_OK=0
+  else
+    echo "  ✅ $t"
   fi
 done
 echo "  $([ $LINT_OK = 1 ] && echo ✅ || echo ❌) ruff check"
