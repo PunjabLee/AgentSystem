@@ -11,6 +11,7 @@
 
 import ast
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -184,3 +185,35 @@ def test_audit_does_not_import_intent() -> None:
         if m.startswith("agentsystem.intent")
     ]
     assert not offenders, f"audit/ 越界依赖：{offenders}"
+
+
+def test_grade_vocabulary_matches_the_corpus() -> None:
+    """业务表的等级值域必须与 RAG 语料一致。
+
+    立项能力②是「静态知识与动态业务数据融合问答」。语料说「一等品」而业务表
+    存「一级品」时，`WHERE grade = ...` **不报错，只返回空集** —— 于是被解读成
+    「没有该等级的库存」，融合问答给出一个看似合理的错误答案。
+
+    这类跨源分叉真实发生过：设计文档的列注释与语料曾用不同字面量，
+    而两边各自都自洽，靠人眼比对发现不了。语料是被检索的事实来源，
+    值域以它为准。
+    """
+    corpus = pathlib.Path("corpus/06-色差与等级判定标准.md")
+    if not corpus.exists():
+        pytest.skip("语料文件不存在")
+
+    # 语料里等级出现在表格首列，形如 `| 优等品 | ≤ 1.0 | ...`
+    in_corpus = set(
+        re.findall(r"^\|\s*([一-龥]{2,4}品)\s*\|", corpus.read_text(encoding="utf-8"), re.M)
+    )
+    assert in_corpus, "语料中未解析出任何等级值，检查表格格式是否变了"
+
+    spec = pathlib.Path("docs/design/P2-DETAILED-DESIGN.md").read_text(encoding="utf-8")
+    m = re.search(r"Grade\s*=\s*Literal\[([^\]]+)\]", spec)
+    assert m, "P2 详细设计中未找到 Grade 的 Literal 定义"
+    in_spec = set(re.findall(r'"([^"]+)"', m.group(1)))
+
+    assert in_spec == in_corpus, (
+        f"等级值域与语料分叉 —— 设计={sorted(in_spec)} 语料={sorted(in_corpus)}。"
+        "语料是检索的事实来源，值域应向它对齐。"
+    )

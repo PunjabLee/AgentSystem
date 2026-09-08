@@ -243,7 +243,7 @@ CREATE TABLE sales_order_line (
   product_code    VARCHAR(32) NOT NULL,
   spec            VARCHAR(64) NOT NULL,         -- 门幅×克重 / 边长×厚度
   color_code      VARCHAR(32) NOT NULL,         -- 色号
-  grade_required  VARCHAR(16) NOT NULL,         -- 优等品/一级品/合格品
+  grade_required  VARCHAR(16) NOT NULL,         -- 优等品/一等品/合格品
   same_batch_req  BOOLEAN     NOT NULL,         -- 是否要求同缸同批（关键字段）
   qty             NUMERIC(14,3) NOT NULL,
   uom             VARCHAR(8)  NOT NULL,         -- 米 / 平方米 / 件
@@ -262,7 +262,7 @@ CREATE TABLE inventory_batch (
   product_code    VARCHAR(32) NOT NULL,
   batch_no        VARCHAR(32) NOT NULL,         -- 染缸号 D2601-08 / 窑批号 K2603-15
   color_code      VARCHAR(32) NOT NULL,
-  grade           VARCHAR(16) NOT NULL,         -- 优等品/一级品/合格品
+  grade           VARCHAR(16) NOT NULL,         -- 优等品/一等品/合格品
   spec            VARCHAR(64) NOT NULL,
   delta_e         NUMERIC(5,2),                 -- 色差 ΔE，跨缸判定依据
   qty_available   NUMERIC(14,3) NOT NULL,

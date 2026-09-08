@@ -74,7 +74,13 @@ class AuditLog(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
 
-    request_payload: Mapped[dict | None] = mapped_column(JSONB, comment="已脱敏")
+    # ⚠️ 注释曾写「已脱敏」，但**全代码库没有任何脱敏实现** —— 那是个无人
+    #    背书的断言。该列当前从不写入（P2 起才决定是否采集），所以暂无危害，
+    #    但注释会被将来往里写数据的人当成「脱敏在别处做过了」。
+    #    真要写入前，必须先落地脱敏函数并在此处改回。
+    request_payload: Mapped[dict | None] = mapped_column(
+        JSONB, comment="写入前须先脱敏；当前无写入路径，脱敏函数尚未实现"
+    )
     response_payload: Mapped[dict | None] = mapped_column(JSONB)
 
     # ── RPA 取证引用（P4）。截图若不进证据链，就只是笔记本上的一堆文件 ──
