@@ -205,6 +205,15 @@ class CreateOrderRequest(BaseModel):
 
 **幂等**：`sales_order.confirm_token` 有 UNIQUE 约束（P2.1.3）。
 
+> 🔴 **这条 UNIQUE 约束不可移除，它是「节点重放」的最后防线。**
+>
+> 实测（`tests/test_langgraph_semantics.py`）：LangGraph 中含 `interrupt()` 的节点
+> 在 resume 时**从节点开头重放**。因此 P2.3.x 落编排时必须遵守
+> [宪法一之附则](../CONSTITUTION.md)：**确认节点只做确认，写操作单独成节点排在其后**。
+>
+> 即便拓扑将来被改坏，本约束仍能在数据库层挡住重复下单 —— 这也是为什么
+> 下面用唯一索引仲裁、而不是应用层「先查后写」。
+
 ```
 INSERT ... ON CONFLICT (confirm_token) DO NOTHING RETURNING order_no
   ├─ 有返回 → 首次创建，返回 201
