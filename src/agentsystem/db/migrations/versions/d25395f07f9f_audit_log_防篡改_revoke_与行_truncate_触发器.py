@@ -58,7 +58,9 @@ DOWNGRADE_SQL = """
 DROP TRIGGER IF EXISTS trg_audit_no_truncate ON audit_log;
 DROP TRIGGER IF EXISTS trg_audit_no_update_delete ON audit_log;
 DROP FUNCTION IF EXISTS deny_audit_mutation();
-GRANT UPDATE, DELETE ON audit_log TO app_rw;
+-- 补回 upgrade 里收走的三项，保持对称。原先漏了 TRUNCATE，
+-- 回滚后会留下一个与升级前不一致的权限状态。
+GRANT UPDATE, DELETE, TRUNCATE ON audit_log TO app_rw;
 """
 
 

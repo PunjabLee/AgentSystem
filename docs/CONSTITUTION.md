@@ -45,6 +45,16 @@
 2. 建表迁移中 `confirm_token` 的 `UNIQUE` 约束有单测覆盖（P2.1.3）。
 3. 子图落地后（P2.3.x）补一条机械检查：扫描节点函数，凡函数体内同时出现 `interrupt(` 与写操作调用即失败。
 
+### 一之附则二 · `audit_log` 只能 fix-forward，禁止 downgrade
+
+**规则**：`audit_log` 的结构变更只允许向前修（再写一个迁移），**不得 `alembic downgrade`**。
+
+**为什么**：`ddl_command_end` 事件触发器拦截对该表的**一切** `ALTER`，而 `DROP COLUMN` 与 `ADD COLUMN` 同属 `command_tag = 'ALTER TABLE'` —— 已实测确认两个方向都被拦。解锁流程 `scripts/migrate_audit_schema.sh` 只支持 `upgrade`，回滚会直接在触发器上崩。
+
+与其留一条会崩的隐藏路径，不如明确禁止：审计表本就不该随意回滚结构，那等于承认「审计记录的形状可以退回去」。
+
+**如何验证**：`scripts/migrate_audit_schema.sh` 不接受 downgrade 参数（刻意的）；本条与附则一同属第一条的实现约束。
+
 ---
 
 ## 二、写路径唯一：只走 LangGraph
