@@ -156,6 +156,28 @@ PoC 的产出用于为后续规模化落地提供选型与投入决策依据。
 
 ## 4. 数据设计
 
+### 4.0 参照完整性：本期不建外键（2026-09-09 决策）
+
+**决定**：九张业务表**一律不设外键约束**，包括 `sales_order_line.order_no`（原有的唯一一处已移除）与 `production_plan.related_order_line`。
+
+**为什么**：评审曾指出 `related_order` 缺外键，论据是「同段落其他列都有」。逐表核对后该论据不成立 —— 整套 DDL 里仅 `sales_order_line` 有一处，其余全为零。这不是疏漏，是一个未曾写明的统一取舍，现予明确。
+
+PoC 的数据来源是**受控的种子生成器**，不是多方并发写入的生产系统。外键在这里买到的保障有限，代价却实在：种子数据必须严格按拓扑序插入、清库要按逆序删、每次调整关联结构都要连带改约束。
+
+**代价（须知晓）**：脏数据不再由数据库拦截。`related_order_line` 指向不存在的行、`order_no` 指向已删订单，数据库都不会报错，只会在查询时静默少返回。
+
+**补偿手段**（这些不是可选项，是本决策成立的前提）：
+
+| 手段 | 位置 |
+|---|---|
+| 种子生成器按拓扑序生成，且生成后自检孤儿行数为 0 | P2.1.7 fixture |
+| 只读工具的 JOIN 一律用 `INNER JOIN`，孤儿行自然不进结果 | P2.2.x |
+| 写端点插入订单行前校验 `order_no` 存在 | P2.3.4 |
+
+**若后续接入真实 ERP 数据，本决策必须重审** —— 那时数据不再受控，外键的价值与现在完全不同。
+
+---
+
 ### 4.1 业务表结构
 
 三类业务数据，每表 ≥100 条模拟数据。
@@ -234,12 +256,17 @@ CREATE TABLE sales_order (
   total_amount    NUMERIC(14,2),
   policy_code     VARCHAR(32),                  -- 适用营销政策
   created_by      VARCHAR(32),
-  created_at      TIMESTAMPTZ DEFAULT now()
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  -- 🔴 幂等键。写端点靠 ON CONFLICT (confirm_token) DO NOTHING 仲裁重复提交，
+  --    也是「含 interrupt 的节点会重放」的最后一道防线（宪法一之附则）。
+  --    移除此约束等同于移除二次确认的兜底。
+  confirm_token   VARCHAR(64) UNIQUE
 );
 
 CREATE TABLE sales_order_line (
   line_id         BIGSERIAL PRIMARY KEY,
-  order_no        VARCHAR(32) REFERENCES sales_order(order_no),
+  order_no        VARCHAR(32) NOT NULL,          -- 不设外键，理由见 §4.0
+  line_no         INTEGER     NOT NULL,          -- 行号，从 1 递增；对用户可读
   product_code    VARCHAR(32) NOT NULL,
   spec            VARCHAR(64) NOT NULL,         -- 门幅×克重 / 边长×厚度
   color_code      VARCHAR(32) NOT NULL,         -- 色号
@@ -248,7 +275,8 @@ CREATE TABLE sales_order_line (
   qty             NUMERIC(14,3) NOT NULL,
   uom             VARCHAR(8)  NOT NULL,         -- 米 / 平方米 / 件
   unit_price      NUMERIC(12,4),
-  line_status     VARCHAR(16)
+  line_status     VARCHAR(16),
+  UNIQUE (order_no, line_no)                     -- 行号在订单内唯一
 );
 ```
 
@@ -264,9 +292,14 @@ CREATE TABLE inventory_batch (
   color_code      VARCHAR(32) NOT NULL,
   grade           VARCHAR(16) NOT NULL,         -- 优等品/一等品/合格品
   spec            VARCHAR(64) NOT NULL,
-  delta_e         NUMERIC(5,2),                 -- 色差 ΔE，跨缸判定依据
+  -- ΔE 基准是**本批 vs 标准大样**，不是批与批之间。跨缸拼单要比的是两批
+  -- 各自 ΔE 的差值（QC-STD-006 §2.3），直接拿本列相减是错的。
+  delta_e         NUMERIC(5,2),
   qty_available   NUMERIC(14,3) NOT NULL,
+  -- P2 不做库存预占，本列恒为 0，预留给未来的预占语义。
+  -- 可用量的判定一律用 qty_available，不要写成 qty_available - qty_locked。
   qty_locked      NUMERIC(14,3) DEFAULT 0,
+  uom             VARCHAR(8)  NOT NULL,         -- 与 sales_order_line.uom 同值域
   inbound_date    DATE,
   qc_status       VARCHAR(16),                  -- 待检/合格/让步接收/不合格
   UNIQUE (warehouse_code, product_code, batch_no, color_code, grade)
@@ -283,12 +316,22 @@ CREATE TABLE production_plan (
   product_code    VARCHAR(32) NOT NULL,
   color_code      VARCHAR(32) NOT NULL,
   process_stage   VARCHAR(32) NOT NULL,         -- 前处理/染色/后整理 或 压机/窑炉/抛光/分级
+  stage_seq       SMALLINT    NOT NULL,         -- 工序顺序，决定「延期向后传播」的方向
   planned_qty     NUMERIC(14,3) NOT NULL,
+  qty_completed   NUMERIC(14,3) DEFAULT 0,      -- 实际完成量，进度推理用
+  uom             VARCHAR(8)  NOT NULL,         -- 🔴 与 planned_qty 配套。缺它则
+                                                --    planned_qty / capacity_per_hour
+                                                --    的 ETA 公式隐含「单位一致」的无据假设
   plan_start      TIMESTAMPTZ NOT NULL,
   plan_end        TIMESTAMPTZ NOT NULL,
+  actual_start    TIMESTAMPTZ,                  -- 实绩。与 plan_* 的差即为延误量
+  actual_end      TIMESTAMPTZ,
   changeover_min  INTEGER DEFAULT 0,            -- 换色/换规格调机时长（分钟），延误推理关键
   status          VARCHAR(16) NOT NULL,         -- 待排/已排/生产中/已完成/暂停
-  related_order   VARCHAR(32)                   -- 关联订单号
+  -- 🔴 关联到**订单行**而非订单头。一张订单三个色号会产生三条产线计划，
+  --    以订单头为粒度时「这条计划服务哪一行」无法判断 —— 而 S5 的联动分析
+  --    （某订单延期影响哪些下游）正是要回答这个。不设外键，理由见 §4.0。
+  related_order_line  BIGINT
 );
 ```
 
