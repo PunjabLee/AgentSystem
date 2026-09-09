@@ -29,6 +29,8 @@
 cd <dify>/docker && docker compose up -d
 
 # ② 数据库角色与授权（超级用户）
+#    ⚠️ 必须在 ① 之后 —— 本步骤要对 dify 库执行 REVOKE，缺库会**直接失败**
+#       （刻意的，见下方说明）。
 cd <本仓库>
 psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
      -v migrator_pw="$PG_MIGRATOR_PASSWORD" \
@@ -37,11 +39,37 @@ psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
      -f scripts/01_roles_and_grants.sql
 psql -h 127.0.0.1 -U app_migrator -d agentsystem -f scripts/02_grants_in_agentsystem.sql
 
-# ③ 建表
+# ③ 第四角色与库级隔离（超级用户）
+psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+     -v dify_owner_pw="$PG_DIFY_OWNER_PASSWORD" \
+     -f scripts/04_database_isolation.sql
+
+# ④ 建表
 make migrate
 
-# ④ 审计防篡改的第三层（必须超级用户，故不在迁移里）
+# ⑤ 审计防篡改的第三层（必须超级用户，故不在迁移里）
 psql -h 127.0.0.1 -U postgres -d agentsystem -f scripts/03_audit_event_trigger.sql
+```
+
+### ⚠️ 步骤 ① 与 ② 的先后是安全控制的承重结构
+
+`scripts/01` 里的 `REVOKE ALL ON DATABASE dify FROM PUBLIC` 是宪法第三条在授权层
+的落地：应用侧读向量只走 Dify 的检索 API，`app_rw` 连 dify 的权限都不给，
+「绕过 Dify 直写向量库」因而在授权层不可能发生。
+
+**该控制只在 dify 库已存在时才能施加。** 所以脚本在缺库时**默认失败而非跳过** ——
+曾经写成静默跳过，被安全评审判为 control-regression：真实部署里 Dify 的
+compose 若后启动，这条 REVOKE 就永远不会执行，而 PostgreSQL 给新库默认授予
+PUBLIC CONNECT，控制当场失效且无人察觉。
+
+确无 Dify 的环境（如 CI）须**显式**放行：
+
+```bash
+psql ... -v allow_missing_dify=1 -f scripts/01_roles_and_grants.sql
+```
+
+放行时脚本会打印醒目告警。**Dify 部署完成后必须重跑 `scripts/01`**，否则
+`app_rw` 可直连向量库。跳过安全控制必须是写出来的决定，不能是默认行为。
 
 # ⑤ 本地模型与演示令牌
 make ollama-models

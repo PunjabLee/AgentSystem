@@ -48,13 +48,45 @@ SELECT 'CREATE DATABASE agentsystem OWNER app_migrator'
 \gexec
 ALTER DATABASE agentsystem OWNER TO app_migrator;
 
+-- 🔴 建库后**立刻**收回 PUBLIC，不等 scripts/04。
+--    PostgreSQL 给新建数据库默认授予 PUBLIC CONNECT；若把收回留给后续脚本，
+--    只跑 01+02 的路径会留下一个对所有角色开放的库 —— 时间窗口内 fail-open。
+--    04 里的同一条 REVOKE 保留不动，重复执行无害。
+REVOKE ALL ON DATABASE agentsystem FROM PUBLIC;
+GRANT CONNECT ON DATABASE agentsystem TO app_migrator;
+GRANT CONNECT ON DATABASE agentsystem TO app_rw;
+GRANT CONNECT ON DATABASE agentsystem TO app_ro;
+
 -- ── 4. dify 库：仅 app_ro 可连（宪法第三条）──────────────────────
 --    app_rw 也不给 —— 应用侧读向量走 Dify 的检索 API，不直连向量表，
 --    这样「绕过 Dify 直写向量库」在授权层就不可能发生。
 --
---    按存在性守卫：CI 环境没有 Dify。**刻意不建它** —— Dify 的库归
---    Dify 的 compose 管（P0-7 决策），本脚本不该替它建，否则会造出一个
---    schema 为空的假库，让「Dify 已就绪」的判断失真。
+-- 🔴 这里是**安全控制**，不是普通语句，所以缺库时默认**失败而非跳过**。
+--    曾经写成无条件 `WHERE EXISTS` 守卫，被安全评审判为 control-regression
+--    与 fail-open-state-drift，理由成立：真实部署顺序是 Dify 的 compose
+--    **后**启动，那时这条 REVOKE 早已被静默跳过且不会重来，而新库默认
+--    对 PUBLIC 开放 —— app_rw 于是能直连向量库，上面那条保障当场失效。
+--
+--    确无 Dify 的环境（CI）须**显式**传 -v allow_missing_dify=1 放行。
+--    跳过安全控制必须是写出来的决定，不能是默认行为。
+\if :{?allow_missing_dify}
+\else
+  \set allow_missing_dify 0
+\endif
+
+SELECT format(
+  'DO $guard$ BEGIN RAISE EXCEPTION %L; END $guard$',
+  'dify 库不存在，宪法第三条的授权层控制（REVOKE ALL ON DATABASE dify '
+  'FROM PUBLIC）无法执行。若本环境确无 Dify，请显式传 -v allow_missing_dify=1'
+) WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dify')
+    AND :allow_missing_dify = 0
+\gexec
+
+\if :allow_missing_dify
+  \echo '  ⚠️  已按 allow_missing_dify=1 跳过 dify 库的授权控制'
+  \echo '     —— Dify 部署后必须重跑本脚本，否则 app_rw 可直连向量库'
+\endif
+
 SELECT 'REVOKE ALL ON DATABASE dify FROM PUBLIC'
  WHERE EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dify')
 \gexec
