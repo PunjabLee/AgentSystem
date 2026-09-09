@@ -55,6 +55,7 @@ jobs:
               "PG_MIGRATOR_USER=app_migrator", f"PG_MIGRATOR_PASSWORD={secrets.token_urlsafe(16)}",
               "PG_APP_USER=app_rw",           f"PG_APP_PASSWORD={secrets.token_urlsafe(16)}",
               "PG_RO_USER=app_ro",            f"PG_RO_PASSWORD={secrets.token_urlsafe(16)}",
+              f"PG_DIFY_OWNER_PASSWORD={secrets.token_urlsafe(16)}",
               f"SESSION_SIGNING_KEY={secrets.token_urlsafe(48)}",
           ]
           pathlib.Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -66,6 +67,13 @@ jobs:
           PGPASSWORD: ci-postgres-pw
         run: |
           set -a; . ./.env; set +a
+          # dify 库在 CI 里是**授权测试的靶子**（空库），不是 Dify 部署。
+          # test_db_isolation.py 要验证「app_ro 写不了 dify」「dify_owner 连不上
+          # agentsystem」，这些断言需要库对象存在才能执行 —— 缺了它用例会被
+          # skip，而 skip 不是 pass，最后一步会判失败。
+          # scripts/01 本身仍按存在性守卫、不替 Dify 建库：那条针对的是
+          # 开发/生产环境里被误判为「Dify 已就绪」。
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE dify'
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
             -v migrator_pw="$PG_MIGRATOR_PASSWORD" \
             -v app_pw="$PG_APP_PASSWORD" \
@@ -73,6 +81,10 @@ jobs:
             -f scripts/01_roles_and_grants.sql
           PGPASSWORD="$PG_MIGRATOR_PASSWORD" psql -h 127.0.0.1 -U app_migrator -d agentsystem \
             -v ON_ERROR_STOP=1 -f scripts/02_grants_in_agentsystem.sql
+          # 第四角色与库级隔离（P1.3.5 补齐项）
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -v dify_owner_pw="$PG_DIFY_OWNER_PASSWORD" \
+            -f scripts/04_database_isolation.sql
 
       - name: 迁移与防篡改层
         env:

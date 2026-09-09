@@ -38,13 +38,28 @@ SELECT format('ALTER ROLE app_migrator PASSWORD %L', :'migrator_pw') \gexec
 SELECT format('ALTER ROLE app_rw       PASSWORD %L', :'app_pw')      \gexec
 SELECT format('ALTER ROLE app_ro       PASSWORD %L', :'ro_pw')       \gexec
 
--- ── 3. agentsystem 库属主移交给 app_migrator ─────────────────────
+-- ── 3. agentsystem 库：不存在则建，属主一律归 app_migrator ────────
+--    原先直接 ALTER，隐含「库已存在」的假设。该假设在开发机成立（库是
+--    手工建的），在**全新环境里不成立** —— CI 第一次真跑就撞在这里：
+--    `database "agentsystem" does not exist`。
+--    本地残留状态掩盖问题，正是必须在干净环境跑一次 CI 的理由。
+SELECT 'CREATE DATABASE agentsystem OWNER app_migrator'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'agentsystem')
+\gexec
 ALTER DATABASE agentsystem OWNER TO app_migrator;
 
 -- ── 4. dify 库：仅 app_ro 可连（宪法第三条）──────────────────────
 --    app_rw 也不给 —— 应用侧读向量走 Dify 的检索 API，不直连向量表，
 --    这样「绕过 Dify 直写向量库」在授权层就不可能发生。
-REVOKE ALL ON DATABASE dify FROM PUBLIC;
-GRANT CONNECT ON DATABASE dify TO app_ro;
+--
+--    按存在性守卫：CI 环境没有 Dify。**刻意不建它** —— Dify 的库归
+--    Dify 的 compose 管（P0-7 决策），本脚本不该替它建，否则会造出一个
+--    schema 为空的假库，让「Dify 已就绪」的判断失真。
+SELECT 'REVOKE ALL ON DATABASE dify FROM PUBLIC'
+ WHERE EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dify')
+\gexec
+SELECT 'GRANT CONNECT ON DATABASE dify TO app_ro'
+ WHERE EXISTS (SELECT 1 FROM pg_database WHERE datname = 'dify')
+\gexec
 
 \echo '  ✅ 角色与库级授权完成'
