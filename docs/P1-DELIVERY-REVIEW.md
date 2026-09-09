@@ -104,5 +104,5 @@
 | 项 | 状态 | 影响 |
 |---|---|---|
 | **D1 · AutoDL 实例 SSH 凭据** | 待用户（本周末） | M1/M2 无法验证；死线 P2 结束（约第 6 周） |
-| `main` 分支保护规则 | 待远程仓库 | 当前靠约定 |
-| GitHub Actions | 已写，无远程故未运行 | 今天的闸门是本地 `make check` / `make p1-exit` |
+| `main` 分支保护规则 | 待配置 | 远程已就绪（`PunjabLee/AgentSystem`，PUBLIC），保护规则尚未启用 |
+| GitHub Actions | ✅ **2026-09-09 首次绿** | 前两次推送均 failure —— 本地残留状态掩盖了「库不存在」。[run 34302264431](https://github.com/PunjabLee/AgentSystem/actions/runs/34302264431) |
