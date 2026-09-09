@@ -3,7 +3,7 @@
 # 未实现的目标一律**显式失败**，不留空壳 —— 一个静默成功的 make backup
 # 比没有 make backup 危险得多。
 
-.PHONY: help chat test lint fmt check migrate migrate-audit mint-tokens \
+.PHONY: help chat test lint fmt check audit-health migrate migrate-audit mint-tokens \
         audit-tail ollama-models dev backup restore-drill p1-exit
 
 help:  ## 列出可用目标
@@ -21,6 +21,13 @@ test:  ## 跑测试（不含 LLM 调用，见 P1.5.1）
 	uv run pytest
 
 check: lint test  ## lint + test，提交前跑这个
+
+audit-health:  ## 查有 attempt 无 outcome 的写操作（两段式的自检）
+	@uv run python -c "\
+import asyncio; from agentsystem.audit import find_hanging_attempts; \
+rows = asyncio.run(find_hanging_attempts()); \
+print('  ✅ 无悬挂 attempt') if not rows else \
+[print(f'  🔴 {r.describe()}') for r in rows]"
 	@uv run ruff format --check .
 
 # ── 数据库 ────────────────────────────────────────────────────

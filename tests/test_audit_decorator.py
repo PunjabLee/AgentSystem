@@ -9,7 +9,13 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-from agentsystem.audit import WriteOutcome, audited
+from agentsystem.audit import (
+    WriteOutcome,
+    audited,
+    find_hanging_attempts,
+    write_attempt,
+    write_outcome,
+)
 from agentsystem.db.session import app_session, get_app_sessionmaker
 from agentsystem.errors import BusinessRejection, ConfirmationRequired
 from agentsystem.gateway.context import RequestContext, reset_context, set_context
@@ -217,7 +223,6 @@ async def test_metrics_records_actual_tier_not_requested(ctx: RequestContext) ->
     M3 产生的数据算到 M4 头上 —— 结论作废，且无从事后察觉。
     """
     from agentsystem.audit import metrics_from_llm_result
-    from agentsystem.audit.writer import write_outcome
     from agentsystem.llm.types import LLMResult
 
     result = LLMResult(
@@ -240,8 +245,6 @@ async def test_metrics_records_actual_tier_not_requested(ctx: RequestContext) ->
 
 async def test_llm_metrics_land_in_audit_row(ctx: RequestContext) -> None:
     """P1.2.4：埋点必须真落进审计表，采到了落不了库等于没采。"""
-    from agentsystem.audit.writer import write_outcome
-
     await write_outcome(
         ctx,
         action_type="read",
@@ -269,3 +272,67 @@ async def test_llm_metrics_land_in_audit_row(ctx: RequestContext) -> None:
         396,
         96,
     )
+
+
+# ── 悬挂 attempt 检测（评审 5.3）────────────────────────────
+async def test_healthy_pairs_are_not_reported(ctx: RequestContext) -> None:
+    """阴性对照：attempt + outcome 配对齐全的不得被报成悬挂。
+
+    没有这条，一个恒返回空列表的实现也能"通过"。
+    """
+    from datetime import timedelta
+
+    await write_attempt(ctx, action_type="write", source="langgraph", tool_name="probe")
+    await write_outcome(ctx, action_type="write", source="langgraph", status="success")
+    hanging = await find_hanging_attempts(grace=timedelta(seconds=0))
+    assert ctx.trace_id not in {h.trace_id for h in hanging}
+
+
+async def test_attempt_without_outcome_is_detected(ctx: RequestContext) -> None:
+    """🔴 只写 attempt 不写 outcome —— 必须被检出。
+
+    这正是两段式要防的场景：业务事务中途崩溃，attempt 已独立提交。
+    「可检测」是两段式的全部理由，但此前**没有任何检测手段** —— 性质无背书。
+    """
+    from datetime import timedelta
+
+    await write_attempt(ctx, action_type="write", source="langgraph", tool_name="crash_here")
+    # 刻意不写 outcome，模拟进程在业务事务中途死掉
+
+    hanging = await find_hanging_attempts(grace=timedelta(seconds=0))
+    found = {h.trace_id: h for h in hanging}
+    assert ctx.trace_id in found, "悬挂的 attempt 未被检出"
+    assert found[ctx.trace_id].tool_name == "crash_here"
+    assert "crash_here" in found[ctx.trace_id].describe()
+
+
+async def test_grace_period_suppresses_in_flight_attempts(ctx: RequestContext) -> None:
+    """宽限期内的 attempt 不报 —— 正在执行的长事务不是故障。
+
+    宽限期若不生效，每一次进行中的写操作都会被报成悬挂，告警立刻失去意义。
+    """
+    from datetime import timedelta
+
+    await write_attempt(ctx, action_type="write", source="langgraph", tool_name="in_flight")
+    hanging = await find_hanging_attempts(grace=timedelta(minutes=5))
+    assert ctx.trace_id not in {h.trace_id for h in hanging}
+
+
+async def test_read_attempts_are_excluded_by_default(ctx: RequestContext) -> None:
+    """默认只查写操作 —— 读的 attempt 行不报。
+
+    两段式是写路径的机制：装饰器仅在 action_type=="write" 时写 attempt 行。
+    开发库里那些 read 的 attempt 是测试用 SQL 直接播的，且因审计表仅追加而
+    **删不掉**。默认若不排除，本工具在开发环境恒为红色，很快就没人看了。
+    """
+    from datetime import timedelta
+
+    await write_attempt(ctx, action_type="read", source="langgraph", tool_name="a_read")
+
+    assert ctx.trace_id not in {
+        h.trace_id for h in await find_hanging_attempts(grace=timedelta(seconds=0))
+    }
+    assert ctx.trace_id in {
+        h.trace_id
+        for h in await find_hanging_attempts(grace=timedelta(seconds=0), writes_only=False)
+    }
