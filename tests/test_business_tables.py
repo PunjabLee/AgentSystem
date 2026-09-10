@@ -91,9 +91,10 @@ async def test_inventory_qty_cannot_be_negative(db) -> None:
     with pytest.raises(IntegrityError) as exc:
         await db.execute(
             text(
-                "INSERT INTO inventory_batch (warehouse_code, bu_code, product_code, batch_no, "
+                "INSERT INTO inventory_batch (warehouse_code, region, bu_code, "
+                " product_code, batch_no, "
                 " color_code, grade, spec, qty_available, uom) "
-                "VALUES ('WH-1','BU-B','P-X','B-1','C-1','一等品','spec',-1,'平方米')"
+                "VALUES ('WH-1','华东','BU-B','P-X','B-1','C-1','一等品','spec',-1,'平方米')"
             )
         )
     assert "qty_nonneg" in str(exc.value)
@@ -105,9 +106,9 @@ async def test_batch_identity_is_unique(db) -> None:
     缺它则同一批次可被拆成多行，库存求和虚高 —— 而这正是 S2 要答的问题。
     """
     ins = text(
-        "INSERT INTO inventory_batch (warehouse_code, bu_code, product_code, batch_no, "
+        "INSERT INTO inventory_batch (warehouse_code, region, bu_code, product_code, batch_no, "
         " color_code, grade, spec, qty_available, uom) "
-        "VALUES ('WH-U','BU-B','P-X','B-U','C-1','一等品','spec',10,'平方米')"
+        "VALUES ('WH-U','华东','BU-B','P-X','B-U','C-1','一等品','spec',10,'平方米')"
     )
     await db.execute(ins)
     with pytest.raises(IntegrityError) as exc:
@@ -129,9 +130,10 @@ async def test_confirm_token_is_unique(db) -> None:
     移除本约束等同于移除二次确认的兜底（宪法一之附则）。
     """
     ins = text(
-        "INSERT INTO sales_order (order_no, bu_code, customer_code, customer_name, "
+        "INSERT INTO sales_order (order_no, bu_code, region, customer_code, customer_name, "
         " order_type, order_date, required_date, status, confirm_token) "
-        "VALUES (:o,'BU-B','C-1','化名客户','经销','2026-09-10','2026-10-10','待评审','tok-dup')"
+        "VALUES (:o,'BU-B','华东','C-1','化名客户','经销',"
+        " '2026-09-10','2026-10-10','待评审','tok-dup')"
     )
     await db.execute(ins, {"o": "SO-A"})
     with pytest.raises(IntegrityError) as exc:
@@ -146,10 +148,33 @@ async def test_null_confirm_tokens_do_not_collide(db) -> None:
     补令牌」会成为建表的前置条件。
     """
     ins = text(
-        "INSERT INTO sales_order (order_no, bu_code, customer_code, customer_name, "
+        "INSERT INTO sales_order (order_no, bu_code, region, customer_code, customer_name, "
         " order_type, order_date, required_date, status) "
-        "VALUES (:o,'BU-B','C-1','化名客户','经销','2026-09-10','2026-10-10','待评审')"
+        "VALUES (:o,'BU-B','华东','C-1','化名客户','经销','2026-09-10','2026-10-10','待评审')"
     )
     for o in ("SO-N1", "SO-N2", "SO-N3"):
         await db.execute(ins, {"o": o})
     await db.rollback()
+
+
+async def test_region_is_required_on_every_filtered_table(db) -> None:
+    """🔴 三条查询路径的过滤锚点都必须有 region，且非空。
+
+    users.yaml 早就给用户配了 `regions`，RequestContext.narrow_region() 也在，
+    但业务表此前**一个 region 列都没有** —— 权限模型缺了一半，区域级越权
+    无从表达。可空同样不行：NULL 在 `region = ANY(:allowed)` 下既不匹配也不
+    报错，等于把那一行对所有人隐藏，或（若写成 NOT IN）对所有人暴露。
+    """
+    rows = (
+        await db.execute(
+            text(
+                "SELECT table_name, is_nullable FROM information_schema.columns "
+                " WHERE column_name = 'region' AND table_schema = 'public'"
+            )
+        )
+    ).all()
+    got = {r.table_name: r.is_nullable for r in rows}
+    assert set(got) == {"sales_order", "inventory_batch", "production_line"}, (
+        f"region 覆盖的表不对: {sorted(got)}"
+    )
+    assert all(v == "NO" for v in got.values()), f"region 不得可空: {got}"

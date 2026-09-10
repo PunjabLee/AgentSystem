@@ -129,6 +129,9 @@ class ProductionLine(Base):
     line_type: Mapped[str] = mapped_column(
         String(32), nullable=False, comment="染缸/定型机 · 压机/窑炉/抛光线 · 注浆线/隧道窑"
     )
+    # 产线所在区域。production_plan 的区域过滤经由本列 —— 计划本身不带
+    # region，因为一条线不会跨区（P2.4.2）。
+    region: Mapped[str] = mapped_column(String(16), nullable=False, comment="产线所在区域")
     capacity_per_hour: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
 
     # 🔴 产能带单位而计划量也带单位（production_plan.uom），两者必须可比。
@@ -144,4 +147,7 @@ class ProductionLine(Base):
         comment="running / maintenance / idle",
     )
 
-    __table_args__ = (Index("ix_production_line_bu_type", "bu_code", "line_type"),)
+    __table_args__ = (
+        Index("ix_production_line_bu_type", "bu_code", "line_type"),
+        Index("ix_production_line_scope", "bu_code", "region"),
+    )
