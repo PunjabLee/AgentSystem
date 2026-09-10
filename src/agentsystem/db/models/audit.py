@@ -40,7 +40,9 @@ class AuditLog(Base):
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
     # 入站 X-Trace-Id 的降级留存。客户端可指定权威 trace_id 即可让两次操作
     # 共用一个 id，污染 attempt/outcome 的串联，故只作参考不作权威（§2.5.3）。
-    client_trace_id: Mapped[str | None] = mapped_column(String(64))
+    client_trace_id: Mapped[str | None] = mapped_column(
+        String(64), comment="入站 X-Trace-Id 的降级留存，仅作参考，永不作为权威 trace_id"
+    )
 
     session_id: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(

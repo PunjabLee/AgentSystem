@@ -238,7 +238,9 @@ ETA = 该线队尾 plan_end
 延误 = ETA > required_date
 ```
 
-**外键约束**：`sales_order_line` / `inventory_batch` / `production_plan` 的 `product_code` 引用 `product`、`(bu_code, color_code)` 引用 `color`、`line_code` 引用 `production_line`。这同时消除了一类脏数据——原设计中 `bu_code` 在三张业务表里各存一份且无约束，一行数据完全可能是 `bu_code='BU-A'` 配一个瓷砖的 `product_code`。
+**参照关系**（**不建外键**，见 [§4.0](#40-参照完整性本期不建外键2026-09-09-决策)）：`sales_order_line` / `inventory_batch` / `production_plan` 的 `product_code` 对应 `product`、`(bu_code, color_code)` 对应 `color`、`line_code` 对应 `production_line`。
+
+这些关系仍有一类脏数据要防：`bu_code` 在三张业务表里各存一份，一行数据完全可能是 `bu_code='BU-A'` 配一个瓷砖的 `product_code`。不建外键后**数据库不再拦它**，改由 §4.0 的三项补偿手段兜住 —— 其中生成器的孤儿行断言必须一并覆盖「bu_code 与 product 表不一致」这一形态，而不只是「code 不存在」。
 
 #### 4.1.2 订单（sales_order / sales_order_line）
 
