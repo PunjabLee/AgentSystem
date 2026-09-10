@@ -87,6 +87,17 @@ jobs:
             -v dify_owner_pw="$PG_DIFY_OWNER_PASSWORD" \
             -f scripts/04_database_isolation.sql
 
+      - name: 预建扩展（须超级用户）
+        # CREATE EXTENSION 要求超级用户，Alembic 以 app_migrator 运行建不了。
+        # 必须排在迁移之前：product 的 gin_trgm_ops 索引依赖 pg_trgm，
+        # 缺它迁移直接报 operator class "gin_trgm_ops" does not exist。
+        # 本地开发机手工建过，所以只有 CI 这种全新库才暴露 —— 正是 CI 的价值。
+        env:
+          PGPASSWORD: ci-postgres-pw
+        run: |
+          psql -h 127.0.0.1 -U postgres -d agentsystem -v ON_ERROR_STOP=1 \
+            -f scripts/06_extensions.sql
+
       - name: 迁移与防篡改层
         env:
           PGPASSWORD: ci-postgres-pw
