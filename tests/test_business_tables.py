@@ -178,3 +178,29 @@ async def test_region_is_required_on_every_filtered_table(db) -> None:
         f"region 覆盖的表不对: {sorted(got)}"
     )
     assert all(v == "NO" for v in got.values()), f"region 不得可空: {got}"
+
+
+async def test_order_line_sequence_is_ahead_of_seeded_rows(db) -> None:
+    """🔴 自增序列必须领先于已灌入的最大 line_id。
+
+    生成器显式赋 `line_id`（`production_plan.related_order_line` 要引用它），
+    而**显式插入不会推进序列**。灌完 200 多行后序列仍停在个位数，下一次自增
+    插入直接撞主键 —— 报的是 `duplicate key`，指向「有人插了重复数据」，
+    与真正的原因（序列没跟上）差得很远。
+
+    实测踩到：灌完数据后，一条本该报唯一约束冲突的用例改报了主键冲突。
+    P2.3.4 的写端点插订单行时会撞上同一件事。
+    """
+    row = (
+        await db.execute(
+            text(
+                "SELECT (SELECT last_value FROM sales_order_line_line_id_seq) AS seq,"
+                " COALESCE((SELECT max(line_id) FROM sales_order_line), 0) AS max_id"
+            )
+        )
+    ).one()
+    if row.max_id == 0:
+        pytest.skip("表为空，尚未灌数据")
+    assert row.seq > row.max_id, (
+        f"序列 {row.seq} 未领先于最大 line_id {row.max_id} —— 下次插入会撞主键"
+    )
