@@ -42,6 +42,13 @@ class SalesOrder(Base):
 
     order_no: Mapped[str] = mapped_column(String(32), primary_key=True, comment="SO-2026-000123")
     bu_code: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    # 🔴 区域级权限的落点（P2.4.2）。users.yaml 给每个用户配了 regions，
+    #    RequestContext.narrow_region() 也早就在了，但此前**业务表里没有任何
+    #    region 列** —— 区域级越权根本无从表达，权限模型缺了一半。
+    #    与 bu_code 同样反范式化到本表：不建外键后 JOIN 不再有约束保障，
+    #    把权限过滤架在 JOIN 上等于把防线建在数据库不再守护的关系上。
+    region: Mapped[str] = mapped_column(String(16), nullable=False, comment="客户所属区域")
     customer_code: Mapped[str] = mapped_column(String(32), nullable=False, comment="化名客户编码")
     customer_name: Mapped[str] = mapped_column(
         String(64), nullable=False, comment="化名，如「华东建材-A001」"
@@ -74,6 +81,8 @@ class SalesOrder(Base):
             name="status_enum",
         ),
         Index("ix_sales_order_bu_status", "bu_code", "status"),
+        # 权限过滤每次查询都走，bu+region 是复合上界
+        Index("ix_sales_order_scope", "bu_code", "region"),
         # 支撑「哪些订单快到期了」——S4/S5 的高频入口
         Index("ix_sales_order_required_date", "required_date"),
     )

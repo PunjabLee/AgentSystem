@@ -31,6 +31,8 @@ class InventoryBatch(Base):
 
     batch_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     warehouse_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 仓库所属区域。见 sales_order.region 的说明（P2.4.2）。
+    region: Mapped[str] = mapped_column(String(16), nullable=False, comment="仓库所属区域")
     bu_code: Mapped[str] = mapped_column(String(8), nullable=False)
     product_code: Mapped[str] = mapped_column(String(32), nullable=False)
     batch_no: Mapped[str] = mapped_column(
@@ -77,4 +79,5 @@ class InventoryBatch(Base):
         CheckConstraint("grade IN ('优等品', '一等品', '合格品')", name="grade_enum"),
         CheckConstraint("qty_available >= 0", name="qty_nonneg"),
         Index("ix_inventory_batch_lookup", "bu_code", "product_code", "color_code"),
+        Index("ix_inventory_batch_scope", "bu_code", "region"),
     )

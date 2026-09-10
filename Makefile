@@ -3,7 +3,7 @@
 # 未实现的目标一律**显式失败**，不留空壳 —— 一个静默成功的 make backup
 # 比没有 make backup 危险得多。
 
-.PHONY: help chat test lint fmt check audit-health migrate migrate-audit mint-tokens \
+.PHONY: help chat test lint fmt check audit-health seed seed-check migrate migrate-audit mint-tokens \
         audit-tail ollama-models dev backup restore-drill p1-exit
 
 help:  ## 列出可用目标
@@ -21,6 +21,12 @@ test:  ## 跑测试（不含 LLM 调用，见 P1.5.1）
 	uv run pytest
 
 check: lint test  ## lint + test，提交前跑这个
+
+seed:  ## 清空并重灌模拟数据 + 跑断言校验（P2.2.x）
+	@uv run python scripts/seed.py
+
+seed-check:  ## 只跑断言校验，不动数据
+	@uv run python scripts/seed.py --check
 
 audit-health:  ## 查有 attempt 无 outcome 的写操作（两段式的自检）
 	@uv run python -c "\
