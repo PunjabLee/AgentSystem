@@ -176,6 +176,11 @@ docker compose up -d
 
 `pg_restore` 之后**必须**补两件事，否则新实例是残的：
 
+0. **扩展由超级用户预建**：`psql -U postgres -d agentsystem -f scripts/06_extensions.sql`
+   —— `pg_trgm`（product 名称模糊匹配）与 `vector`（Dify 向量存储）。
+   `CREATE EXTENSION` 要求超级用户，Alembic 以 `app_migrator` 运行建不了。
+   缺 `pg_trgm` 时迁移报 `operator class "gin_trgm_ops" does not exist`。
+
 1. **`CREATE EXTENSION vector` 由超级用户预建**。带 `--role=app_migrator`
    恢复时这一句报 `Must be superuser`，转储里的扩展静默丢失。
 2. **重建事件触发器**。它在转储里，但建它要超级用户，故必然恢复失败，
