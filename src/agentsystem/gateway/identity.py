@@ -10,6 +10,7 @@ PoC 只需要「身份是服务端权威的」这一性质，不需要完整认�
 
 import hashlib
 import hmac
+import re
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
@@ -97,6 +98,34 @@ def get_identity_registry() -> IdentityRegistry:
     return IdentityRegistry.from_yaml()
 
 
+#: 服务端签发的会话标识形状。带前缀是为了让「客户端自造的 id」一眼可辨，
+#: 也方便日后在日志里 grep。
+_CONVERSATION_ID_RE = re.compile(r"^conv_[0-9a-f]{32}$")
+
+
+def new_conversation_id() -> str:
+    """签发一个新的会话标识。
+
+    §2.5.3 的原则是「会话标识由服务端生成，不接受客户端指定」。此前的实现
+    只把 ``conversation_id`` 当作 HMAC 输入 —— 冒充他人确实防住了（HMAC 压入
+    了已认证的 ``user_id``），但**客户端仍可自选取值**，于是：
+
+      · 两段逻辑上无关的会话可以复用同一个 ``conversation_id``，派生出同一个
+        ``session_id`` —— 在会话 A 里创建的 ``write_intent``，会在会话 B 里
+        被当成本会话的待确认项。这不是越权，是**串话**，但在「二次确认」这
+        件事上，串话足以让用户确认了他没打算确认的那一单。
+      · 取值可以是 ``"1"`` 这种，毫无熵，日志里也无从区分。
+
+    改为服务端签发即可根除：客户端拿到什么就回传什么，自己造的过不了校验。
+
+    用 UUIDv7 而非 v4：自带时间前缀，排查时按 id 排序即近似时序。
+
+    Returns:
+        形如 ``conv_<32 位十六进制>`` 的标识。
+    """
+    return f"conv_{uuid.uuid7().hex}"
+
+
 def derive_session_id(user_id: str, conversation_id: str) -> str:
     """由服务端密钥派生 session_id。
 
@@ -128,8 +157,9 @@ def authenticate(
 
     Args:
         bearer_token: Authorization 头里的明文令牌。
-        conversation_id: 客户端提供的会话标识；仅作 HMAC 输入，
-            不直接作为 session_id。
+        conversation_id: **服务端签发**的会话标识（见 ``new_conversation_id``），
+            由客户端原样回传。仅作 HMAC 输入，不直接作为 session_id。
+            形状不合即拒绝 —— 客户端自造的取值过不了校验。
         client_trace_id: 入站 X-Trace-Id。**降级留存作参考，
             永不作为权威 trace_id** —— 客户端可指定即可让两次操作共用
             一个 id，污染 attempt/outcome 的串联。
@@ -138,6 +168,15 @@ def authenticate(
         全链路只读的身份上下文。
     """
     user = get_identity_registry().resolve(bearer_token)
+
+    # 🔴 只接受服务端签发的标识。不校验的话，「服务端签发」就只是一句
+    #    文档承诺 —— 客户端照样能传 "1"，串话与零熵两个问题都还在。
+    if not _CONVERSATION_ID_RE.match(conversation_id):
+        raise AuthError(
+            "conversation_id 必须是服务端签发的标识",
+            code="AUTH_BAD_CONVERSATION_ID",
+        )
+
     return RequestContext(
         user_id=user.user_id,
         session_id=derive_session_id(user.user_id, conversation_id),
