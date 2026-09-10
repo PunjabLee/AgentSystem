@@ -51,3 +51,36 @@ make p1-exit        # 阶段出口判据（P2 起换成对应阶段的判据）
 普通迁移走 `make migrate`。**改 `audit_log` 结构必须走 `make migrate-audit`** ——
 事件触发器会拦下一切对它的 `ALTER`，包括合法迁移。这是刻意的：审计表的结构
 变更就该是需要显式解锁的动作。
+
+---
+
+## main 分支保护（2026-09-10 起生效）
+
+远程已开启保护，**直接 `git push origin main` 会被拒**：
+
+```
+remote: - Required status check "test" is expected.
+! [remote rejected] main -> main (protected branch hook declined)
+```
+
+| 规则 | 值 | 为什么 |
+|---|---|---|
+| 必过检查 | `test` | 本地 `make check` 绿 ≠ CI 绿。CI 曾红了四天没人发现，本地环境的残留状态掩盖了问题 |
+| 严格模式 | 开 | 分支须与 main 同步后才能合，避免「各自都绿、合起来红」 |
+| PR 审批 | **不要求** | 单人项目里自批是形式主义，徒增两步 |
+| 管理员豁免 | **不豁免** | 唯一的开发者就是管理员；豁免等于这条规则对本项目完全不生效 |
+| 强推 / 删除 | 禁止 | main 是判据通过过的锚点，不该被重写 |
+
+### 日常流程
+
+```bash
+git checkout -b feat/xxx          # 从 main 起分支
+# ... 改动 ...
+make check                        # 本地闸门
+git push -u origin feat/xxx       # CI 自动跑
+gh pr create --fill               # 无需审批，等 CI 绿
+gh pr merge --squash --delete-branch
+```
+
+紧急情况下解除保护：`gh api -X DELETE repos/PunjabLee/AgentSystem/branches/main/protection`
+—— 解除后**务必恢复**，否则闸门就永久失效了。
