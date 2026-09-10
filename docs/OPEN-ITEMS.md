@@ -16,7 +16,7 @@
 | # | 任务 | 为什么还得做 | 触发时机 |
 |---|---|---|---|
 | 1.1 | **悬挂 attempt 检测器** | 「attempt 行可检测出来」是两段式写入的**全部理由**。实测 60 条写操作 0 悬挂 —— 机制正常，但缺检测手段，等于性质无背书 | 合入前后皆可 |
-| 1.2 | **`response_payload` / `evidence_ref` 两列无写入路径** | 建了列却无人写。涉及脱敏（宪法第八条），**现在决定比 P4 补便宜**。`evidence_ref` 关联第九条 | P2 开工前定 |
+| ~~1.2~~ | ~~`response_payload` / `evidence_ref` 两列无写入路径~~ | ✅ **2026-09-09 已决策：本期不采集 payload**。宪法第一条要的五要素已由 `action_type`+`target_table`+`target_id`+`before/after_value` 覆盖；存模型输入输出会把审计表变成日志表并引入脱敏负担。两列保留不删（删列要走解锁流程，成本一样）。`evidence_ref` 留到 P3 填 | — |
 | 1.3 | **恢复演练只覆盖 `agentsystem`** | `backup.sh` 备了 `dify.dump` 与 `dify-storage.tar.gz`，`restore_drill.sh` 一处未提。且 storage 缺失时是**静默跳过**，不影响退出码 | P3 灌语料前（3 人收敛） |
 | 1.4 | **`main` 分支保护规则未启用** | 远程已就绪（`PunjabLee/AgentSystem`），"禁止直接推送 + CI 必过"尚未开。当前靠约定 | 合入 main 时 |
 

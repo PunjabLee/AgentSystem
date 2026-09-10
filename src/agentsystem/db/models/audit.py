@@ -74,12 +74,18 @@ class AuditLog(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
 
-    # ⚠️ 注释曾写「已脱敏」，但**全代码库没有任何脱敏实现** —— 那是个无人
-    #    背书的断言。该列当前从不写入（P2 起才决定是否采集），所以暂无危害，
-    #    但注释会被将来往里写数据的人当成「脱敏在别处做过了」。
-    #    真要写入前，必须先落地脱敏函数并在此处改回。
+    # ── 2026-09-09 决策：本期**不采集** payload ──────────────────────
+    #  宪法第一条要的是「操作者、操作内容、时间、变更前后值、trace_id」，
+    #  这些已由 action_type + target_table + target_id + before/after_value
+    #  覆盖。存模型的输入输出会把审计表变成日志表，还引入脱敏负担
+    #  （第八条）—— 而脱敏函数至今不存在。排查模型行为用 trace_id 关联即可。
+    #
+    #  两列保留不删：删列要走事件触发器解锁流程（见宪法一之附则二），
+    #  成本与留着一样，没必要。
+    #
+    #  🔴 将来若要采集，**先落地脱敏函数再开写**，并把注释改回。
     request_payload: Mapped[dict | None] = mapped_column(
-        JSONB, comment="写入前须先脱敏；当前无写入路径，脱敏函数尚未实现"
+        JSONB, comment="本期不采集（2026-09-09 决策）；采集前须先有脱敏"
     )
     response_payload: Mapped[dict | None] = mapped_column(JSONB)
 
