@@ -27,10 +27,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 常用命令
 
 ```bash
-make check          # lint + test，提交前必跑
+make check          # ruff check + ruff format --check + pytest，提交前必跑
+                    # 三样与 CI 完全一致 —— 少跑一样就可能本地绿、CI 红
 make test           # pytest（不含 LLM 调用）
 make seed           # 清空并重灌模拟数据 + 断言校验
 make seed-check     # 只跑断言校验，不动数据
+make dev            # 起本地 API（热重载，仅 127.0.0.1；PORT=8001 改端口）
 make chat           # 模型冒烟；TIER=M4 指定单档
 make audit-health   # 查有 attempt 无 outcome 的写操作
 make p1-exit        # P1 三条出口判据的机械判定

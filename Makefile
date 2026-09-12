@@ -16,6 +16,10 @@ fmt:  ## 格式化
 
 lint:  ## 静态检查（宪法第十一条的机械落地物）
 	uv run ruff check .
+# 🔴 格式检查必须和 CI 用同一条命令。此前 make check 只跑 ruff check，
+#    而 CI 多跑一步 ruff format --check —— 于是「本地全绿、CI 红」成了
+#    可能发生的事，并且真的发生过一次（PR #5 首次推送）。
+	uv run ruff format --check .
 
 test:  ## 跑测试（不含 LLM 调用，见 P1.5.1）
 	uv run pytest
@@ -79,6 +83,11 @@ restore-drill:  ## 恢复到干净容器并比对行数与三层防护（判据 
 p1-exit:  ## 依次执行判据 1/2/3，输出 PASS/FAIL
 	@bash scripts/p1_exit.sh
 
-# ── 尚未实现 ──────────────────────────────────────────────────
-dev:
-	@echo "❌ make dev 待 P2.3.1 的 FastAPI 骨架落地后实现" && exit 1
+# ── 本地服务 ──────────────────────────────────────────────────
+# 只监听 127.0.0.1：这个服务持有 app_rw 凭据且演示令牌就在 .env 里，
+# 绑 0.0.0.0 等于把整套业务数据暴露给同网段的任何人。演示要外部访问时，
+# 走一次显式的端口转发，而不是把默认值改宽。
+PORT ?= 8000
+dev:  ## 起本地 API（热重载，仅监听 127.0.0.1）
+	uv run uvicorn --factory agentsystem.api.app:create_app \
+	  --host 127.0.0.1 --port $(PORT) --reload

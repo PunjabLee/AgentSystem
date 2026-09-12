@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -30,6 +31,15 @@ from agentsystem.settings import get_settings
 _APP_POOL_SIZE = 5
 #: 审计池只承载短事务（一行 INSERT）。P1 详细设计 §3.2 定为 3，与之对齐。
 _AUDIT_POOL_SIZE = 3
+#: 等一条空闲连接的上限。**默认值是 30 秒，必须显式压低**（OPEN-ITEMS 2.1）。
+#:
+#: 实测（``docs/measurements/pool-under-load.md``）：60 个各占 1 秒的请求打进
+#: 5 条连接的池子，最慢的一个等了 12.2 秒，且**返回 200** —— 从外部看与
+#: 「今天大模型有点慢」无法区分。本项目每个请求背后都可能有一次 LLM 调用，
+#: 这种混淆会一路带到 P5 的延迟评测里。
+#:
+#: 压到 5 秒后排队超时变成显式的 429，见 ``app_session`` 的转译。
+_POOL_TIMEOUT_S = 5.0
 
 
 def _make_engine(pool_size: int) -> AsyncEngine:
@@ -39,6 +49,7 @@ def _make_engine(pool_size: int) -> AsyncEngine:
         pool_size=pool_size,
         max_overflow=0,  # 不允许溢出：宁可排队暴露容量问题，也不悄悄突破核算
         pool_pre_ping=True,  # Dify 重启会掐断连接，预检避免首个请求必失败
+        pool_timeout=_POOL_TIMEOUT_S,
     )
 
 
@@ -68,9 +79,28 @@ def get_audit_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 @asynccontextmanager
 async def app_session() -> AsyncIterator[AsyncSession]:
-    """业务会话上下文：正常提交，异常回滚。"""
-    async with get_app_sessionmaker()() as session, session.begin():
-        yield session
+    """业务会话上下文：正常提交，异常回滚。
+
+    池排队超时被转译成 :class:`~agentsystem.gateway.ratelimit.TooManyRequests`。
+    **不转译的话它是一条裸 ``sqlalchemy.exc.TimeoutError``**，落进兜底处理器变成
+    ``SYS_INTERNAL`` / 500 —— 把「一时挤满了」报成了「本系统内部故障」。
+    两者的 ``retryable`` 碰巧都是 true，但 P4 的降级逻辑读的不只是这一个字段：
+    系统故障会触发 RPA 兜底，而连接池挤一挤过会儿就空了，根本不该惊动 RPA。
+
+    Raises:
+        TooManyRequests: 等不到空闲连接（``_POOL_TIMEOUT_S`` 秒内）。
+    """
+    # 导入放在函数内：ratelimit 属 gateway 层，db 层在模块顶层引它会形成
+    # 「底层依赖上层」的方向倒置，也让 db 模块无法脱离 gateway 单独测试。
+    from agentsystem.gateway.ratelimit import TooManyRequests
+
+    try:
+        async with get_app_sessionmaker()() as session, session.begin():
+            yield session
+    except PoolTimeout as exc:
+        raise TooManyRequests(
+            f"数据库连接繁忙，等待超过 {_POOL_TIMEOUT_S:.0f} 秒，请稍后重试"
+        ) from exc
 
 
 async def dispose_engines() -> None:
