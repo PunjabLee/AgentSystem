@@ -56,9 +56,7 @@ async def _client(app):
     必须先 ``POST /v1/sessions`` 换一个 conversation_id —— 服务端不接受
     客户端自造的取值，所以测试也没法图省事写死一个。
     """
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://t", timeout=30
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t", timeout=30) as c:
         r = await c.post("/v1/sessions", headers={"Authorization": f"Bearer {_token()}"})
         assert r.status_code == 200, r.text
         c.headers.update(
@@ -116,9 +114,7 @@ async def test_public_paths_need_no_token(app_with_probe, path: str) -> None:
     健康检查若需要令牌，「服务活着吗」与「令牌配对吗」就纠缠在一起；
     schema 端点若需要令牌，P2.3.6 的 Dify 导入探针会在第一步就卡住。
     """
-    async with AsyncClient(
-        transport=ASGITransport(app=app_with_probe), base_url="http://t"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app_with_probe), base_url="http://t") as c:
         assert (await c.get(path)).status_code != 403
 
 
@@ -127,9 +123,7 @@ async def test_unlisted_path_requires_token(app_with_probe) -> None:
 
     不存在的路径也要先鉴权，是为了不让未认证者拿 404/403 的差别去**探测路由表**。
     """
-    async with AsyncClient(
-        transport=ASGITransport(app=app_with_probe), base_url="http://t"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app_with_probe), base_url="http://t") as c:
         for path in ("/probe/ctx", "/v1/orders", "/definitely/not/a/route"):
             r = await c.get(path)
             assert r.status_code == 403, path
@@ -142,9 +136,7 @@ async def test_client_supplied_conversation_id_is_rejected(app_with_probe) -> No
     放过它会串话：两段无关会话派生出同一个 session_id，会话 A 建的待确认写操作
     会出现在会话 B 里 —— 用户可能确认了他没打算确认的那一单。
     """
-    async with AsyncClient(
-        transport=ASGITransport(app=app_with_probe), base_url="http://t"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app_with_probe), base_url="http://t") as c:
         r = await c.get(
             "/probe/ctx",
             headers={"Authorization": f"Bearer {_token()}", "X-Conversation-Id": "1"},
@@ -160,9 +152,7 @@ async def test_missing_conversation_header_is_rejected(app_with_probe) -> None:
     把「缺失」这条分支删掉，整个用例集照样全绿 —— 于是一个没有会话绑定的
     请求可以直达端点，write_intent 的会话归属就无从谈起了。
     """
-    async with AsyncClient(
-        transport=ASGITransport(app=app_with_probe), base_url="http://t"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app_with_probe), base_url="http://t") as c:
         r = await c.get("/probe/ctx", headers={"Authorization": f"Bearer {_token()}"})
     assert r.status_code == 403
     assert r.json()["code"] == "AUTH_NO_CONVERSATION"

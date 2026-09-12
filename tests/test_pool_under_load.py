@@ -63,9 +63,7 @@ def _app_with_db_probe(hold_s: float | None = None):
 @asynccontextmanager
 async def _client(app):
     """带已领取会话标识的客户端。"""
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://t", timeout=60
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t", timeout=60) as c:
         r = await c.post("/v1/sessions", headers={"Authorization": f"Bearer {_token()}"})
         c.headers.update(
             {
