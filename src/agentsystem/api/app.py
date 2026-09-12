@@ -42,8 +42,12 @@ logger = logging.getLogger(__name__)
 #: 循环不该能压进上万个在途请求。慢查询造成的拥塞由 ``_POOL_TIMEOUT_S`` 兜底，
 #: 两条路径返回同一个 ``SYS_BUSY`` / 429，调用方不必区分是哪一层挡的。
 #:
+#: 取 **256**（2026-09-12 决策）：实测容量是 300 并发 / 0.28 秒全部完成，取 64 时
+#: 100 并发会拒掉 36 个、300 并发会拒掉 236 个 —— 而它们系统 0.12 秒就做得完。
+#: 256 让正常流量基本不撞闸门，同时保留封顶。
+#:
 #: 取值与全部实测数据见 ``docs/measurements/pool-under-load.md``。
-DEFAULT_CONCURRENCY_LIMIT = 64
+DEFAULT_CONCURRENCY_LIMIT = 256
 
 
 def _trace_id() -> str:
