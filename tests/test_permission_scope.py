@@ -145,7 +145,15 @@ def test_business_tables_are_never_selected_directly() -> None:
             if node.func.id != "select":
                 continue
             for arg in node.args:
-                name = arg.id if isinstance(arg, ast.Name) else getattr(arg, "attr", None)
+                # 两种形态都要抓：select(SalesOrder) 与 select(SalesOrder.order_no)。
+                # 旧版只取 arg.attr，对后者取到的是列名 "order_no" 而非模型名，
+                # **按列查询因此能绕过本检查** —— P2.3.4 写写路径时读守卫发现的。
+                if isinstance(arg, ast.Name):
+                    name = arg.id
+                elif isinstance(arg, ast.Attribute) and isinstance(arg.value, ast.Name):
+                    name = arg.value.id
+                else:
+                    name = None
                 if name in _BUSINESS_MODELS:
-                    offenders.append(f"{rel}:{node.lineno} select({name})")
+                    offenders.append(f"{rel}:{node.lineno} select({ast.unparse(arg)})")
     assert not offenders, "业务表须经 scoped_select 查询：\n  " + "\n  ".join(offenders)

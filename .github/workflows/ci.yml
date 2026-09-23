@@ -107,6 +107,13 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d agentsystem -v ON_ERROR_STOP=1 \
             -f scripts/03_audit_event_trigger.sql
 
+      - name: 灌种子数据并校验
+        # P2.3.4 起，业务端点的用例以全量种子数据为对象（例如「每一张订单的延误
+        # 结论都与冻结的评分细则一致」）。空库上它们要么解包失败，要么更糟 ——
+        # 权限用例在零行数据上「通过」，什么也没证明。
+        # 顺带让夹具的全部断言第一次在干净环境里跑：此前只在开发机上跑过。
+        run: uv run python scripts/seed.py
+
       - name: ruff check
         run: uv run ruff check .
 

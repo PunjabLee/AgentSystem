@@ -117,7 +117,9 @@ region: str | None = Field(
 ```python
 Grade = Literal["优等品", "一等品", "合格品"]
 BatchPolicy = Literal["SAME_BATCH", "CROSS_OK_WITHIN_TOL", "ANY"]
-OrderStatus = Literal["待确认", "已确认", "生产中", "已发货", "已完成", "已取消"]
+OrderStatus = Literal["待评审", "已确认", "生产中", "部分发货", "已完成", "已取消"]
+# ⚠️ 勘误（2026-09-23）：原稿为「待确认 / 已发货」，与 sales_order 的 CHECK 约束
+#    及实际数据不符。以约束为准 —— 照原稿写，status="待确认" 会永远返回 0 行且不报错。
 ```
 
 在 `Field(description=...)` 中逐值解释：
@@ -145,6 +147,11 @@ FastAPI 对 `str | None` 生成 OpenAPI 3.1 的 `anyOf: [{type:string},{type:nul
 ## 3. 五个工具的签名
 
 对应五个主线场景的**只读**部分。写端点见 §3.2——它不进工具集（宪法第二条：写路径只走 LangGraph，且 Dify 导入的工具集里不得有写端点）。
+
+> ⚠️ **勘误（2026-09-23 决策）**：`query_policy` **不做 SQL 端点，归入 P3 知识库检索**。
+> 九张表里没有政策表，`FIXTURE-SPEC.md` 与冻结的评分细则 S1 均按 RAG 处理，本节原稿与之矛盾。
+> 实际导出的只读工具为：`query_product` · `query_inventory` · `query_order` · `query_production_plan` ·
+> `query_order_delay`（§3.1 拆出）· `query_plan_downstream`（为细则 S5-d 增补）。见 OPEN-ITEMS 3.1。
 
 ```python
 query_policy(
