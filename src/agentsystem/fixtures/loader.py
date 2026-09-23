@@ -70,6 +70,15 @@ async def resync_sequences(db: AsyncSession) -> dict[str, int]:
         cur_max = f"COALESCE((SELECT max({pk}) FROM {table}), 0)"
         sql = text(f"SELECT setval('{seq}', {cur_max} + 1, false)")
         out[seq] = int((await db.execute(sql)).scalar_one())
+
+    # order_no 是文本主键 SO-2026-000105，序列只管末段数字，不能套上面的 max(pk)。
+    # 漏掉这一段的后果与上面同理，且更隐蔽：make seed 之后第一次下单就撞
+    # 种子数据的号，报 duplicate key —— 看起来像幂等逻辑坏了，其实是序列没跟上。
+    order_max = (
+        "COALESCE((SELECT max(CAST(split_part(order_no, '-', 3) AS bigint)) FROM sales_order), 0)"
+    )
+    sql = text(f"SELECT setval('sales_order_no_seq', {order_max} + 1, false)")
+    out["sales_order_no_seq"] = int((await db.execute(sql)).scalar_one())
     return out
 
 

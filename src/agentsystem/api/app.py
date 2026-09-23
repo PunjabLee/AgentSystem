@@ -24,6 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from agentsystem.api.routes import orders, queries
 from agentsystem.db.session import dispose_engines
 from agentsystem.errors import AppError, SystemError_, ValidationError
 from agentsystem.gateway.context import current_context
@@ -164,6 +165,9 @@ def create_app(*, concurrency_limit: int = DEFAULT_CONCURRENCY_LIMIT) -> FastAPI
         他没打算确认的那一单。
         """
         return {"conversation_id": new_conversation_id()}
+
+    app.include_router(queries.router)
+    app.include_router(orders.router)
 
     # 中间件最后装：它要包住上面所有东西，包括异常处理器产生的响应
     # （trace_id 响应头对错误响应同样要有）。

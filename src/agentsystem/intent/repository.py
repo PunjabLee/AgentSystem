@@ -233,3 +233,31 @@ async def cancel_intent(session: AsyncSession, *, confirm_token: str, session_id
         {"tok": confirm_token, "sid": session_id},
     )
     return result.rowcount == 1
+
+
+async def record_result(session: AsyncSession, *, confirm_token: str, result_ref: str) -> None:
+    """把执行结果的业务主键回填到已消费的意图上。
+
+    🔴 **必须与业务写入在同一个事务里调用。** 幂等重放靠 ``result_ref`` 返回
+    「首次执行的结果」：若回填与订单插入分属两个事务，中间一旦崩溃，就会出现
+    两种不一致 ——
+
+      · 订单已提交、``result_ref`` 为空：重复提交被判为「执行未完成」，
+        用户以为没下成、重新发起，于是下了两单；
+      · ``result_ref`` 已提交、订单回滚：重放返回一个库里不存在的订单号。
+
+    同事务则两者同生同灭。
+
+    Raises:
+        RuntimeError: 令牌不处于「已消费且未回填」的状态。这是编程错误 ——
+            调用顺序错了，或同一令牌被回填了两次 —— 不是用户能触发的情形。
+    """
+    result = await session.execute(
+        text(
+            "UPDATE write_intent SET result_ref = :ref "
+            " WHERE confirm_token = :tok AND state = 'confirmed' AND result_ref IS NULL"
+        ),
+        {"tok": confirm_token, "ref": result_ref},
+    )
+    if result.rowcount != 1:
+        raise RuntimeError(f"令牌 {confirm_token[:6]}… 不处于可回填状态")

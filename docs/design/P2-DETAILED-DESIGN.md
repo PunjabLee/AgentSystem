@@ -117,7 +117,9 @@ region: str | None = Field(
 ```python
 Grade = Literal["优等品", "一等品", "合格品"]
 BatchPolicy = Literal["SAME_BATCH", "CROSS_OK_WITHIN_TOL", "ANY"]
-OrderStatus = Literal["待确认", "已确认", "生产中", "已发货", "已完成", "已取消"]
+OrderStatus = Literal["待评审", "已确认", "生产中", "部分发货", "已完成", "已取消"]
+# ⚠️ 勘误（2026-09-23）：原稿为「待确认 / 已发货」，与 sales_order 的 CHECK 约束
+#    及实际数据不符。以约束为准 —— 照原稿写，status="待确认" 会永远返回 0 行且不报错。
 ```
 
 在 `Field(description=...)` 中逐值解释：
